@@ -638,32 +638,33 @@ Process {
     ############################################################################
     # 4. Filter files by include/exclude patterns
     ############################################################################
-    # Pre-compile your wildcard patterns once, using the fully-qualified enum
-    $includePatterns = $includeGlobs |
-        ForEach-Object { 
-            [WildcardPattern]::Get(
-                $_, 
+
+    # Pre-compile your globs into real WildcardPattern objects:
+    $compiledIncludes = $includeGlobs |
+        ForEach-Object {
+            [System.Management.Automation.WildcardPattern]::Get(
+                $_,
                 [System.Management.Automation.WildcardOptions]::IgnoreCase
-            ) 
+            )
         }
 
-    $excludePatterns = $excludeGlobs |
-        ForEach-Object { 
-            [WildcardPattern]::Get(
-                $_, 
+    $compiledExcludes = $excludeGlobs |
+        ForEach-Object {
+            [System.Management.Automation.WildcardPattern]::Get(
+                $_,
                 [System.Management.Automation.WildcardOptions]::IgnoreCase
-            ) 
+            )
         }
 
-    # Select only files that match at least one include-glob and no exclude-glob
+    # Now select only those files that match ≥1 include-pattern and 0 exclude-patterns:
     $relevant = $files | Where-Object {
         $path = $_.path
 
-        # any include match?
-        ($includePatterns | Where-Object { $_.IsMatch($path) }).Count -gt 0 `
-        -and `
-        # no exclude match?
-        ($excludePatterns | Where-Object { $_.IsMatch($path) }).Count -eq 0
+        # at least one include-pattern matches?
+        ($compiledIncludes | Where-Object { $_.IsMatch($path) }).Count -gt 0
+        -and
+        # no exclude-pattern matches?
+        ($compiledExcludes | Where-Object { $_.IsMatch($path) }).Count -eq 0
     }
 
     if (-not $relevant) {
@@ -671,15 +672,16 @@ Process {
         return
     }
 
-    # Cap number of files to avoid GitHub’s inline-comment limit
+    # Cap the count to avoid hitting GitHub’s inline-comment limits:
     $maxFiles = 300
     if ($relevant.Count -gt $maxFiles) {
-        Write-Warning ("Limiting review to first {0} of {1} changed files " +
-                       "(GitHub caps inline comments at 1000)." `
-                       -f $maxFiles, $relevant.Count)
+        Write-Warning (
+            "Limiting review to first {0} of {1} changed files " +
+            "(GitHub caps inline comments at 1000)."
+            -f $maxFiles, $relevant.Count
+        )
         $relevant = $relevant[0..($maxFiles - 1)]
     }
-
 
     ###########################################################################
     # 5. Autodetect app context
