@@ -986,6 +986,12 @@ Example of an empty-but-valid result:
     $raw    = $resp.choices[0].message.content.Trim() -replace '^```json','' -replace '```$',''
     Write-Host "[DEBUG] Model returned:"
     Write-Host $raw
+
+    # Model is nice and provides regex snippets (which break the json) -> sanitize any “\x” sequences where x != one of the valid JSON escapes
+    # Finds any single backslash that is not immediately followed by ", \, /, b, f, n, r, t or u, and doubles it.
+    # This turns \s into \\s (which JSON then interprets as the literal characters \ + s) without touching \n or \".
+    $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
+
     $review = $raw | ConvertFrom-Json
     $review.summary += "`n`n------`n`n_Code review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model._"
 
