@@ -370,7 +370,7 @@ closingIssuesReferences(first: 50) {
         <#
             .SYNOPSIS
                 Convert a unified diff into plain AL code, keeping a mapping
-                CleanCodeLineNo → UnifiedDiffLineNo  (Hashtable[int,int])
+                CleanCodeLineNo -> UnifiedDiffLineNo  (Hashtable[int,int])
 
             .OUTPUTS
                 [pscustomobject] @{ Text = <string>; Map = <hashtable> }
@@ -383,6 +383,7 @@ closingIssuesReferences(first: 50) {
         $diffL  = 0
 
         foreach ($raw in $Patch -split "`n") {
+            $line = ''
             $diffL++
 
             if ($raw -match '^(diff --git|index |--- |\+\+\+ |@@ )') {
@@ -392,10 +393,10 @@ closingIssuesReferences(first: 50) {
             if ($raw.Length -eq 0) { continue }
 
             switch ($raw[0]) {
-                '-' { continue }                     # pure deletion → ignore        }
-                '+' { $line = $raw.Substring(1) }    # addition       → keep w/o '+'
-                ' ' { $line = $raw.Substring(1) }    # context        → keep
-                default { continue }                 # anything else  → ignore
+                '-' { continue }                     # pure deletion -> ignore        }
+                '+' { $line = $raw.Substring(1) }    # addition       -> keep w/o '+'
+                ' ' { $line = $raw.Substring(1) }    # context        -> keep
+                default { continue }                 # anything else  -> ignore
             }
 
             $cleanL++
@@ -631,7 +632,7 @@ Process {
     Write-Host '::endgroup::'
 
     $files = @($files)               # wrap null / scalar into an array
-    if (-not $files) {               # still empty? → nothing to review
+    if (-not $files) {               # still empty? -> nothing to review
         Write-Host 'Patch is empty. Skipping review.'
         return
     }
