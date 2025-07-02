@@ -672,11 +672,11 @@ Process {
         return
     }
 
-    # Cap the count to avoid hitting GitHub’s inline-comment limits:
+    # Cap to avoid GitHub’s 1000 inline-comment limit
     $maxFiles = 300
     if ($relevant.Count -gt $maxFiles) {
         Write-Warning (
-            "Limiting review to first {0} of {1} changed files. GitHub caps inline comments at 1000."
+            "Limiting review to first {0} of {1} changed files (GitHub caps inline comments at 1000)." `
             -f $maxFiles, $relevant.Count
         )
         $relevant = $relevant[0..($maxFiles - 1)]
