@@ -662,8 +662,7 @@ Process {
         $path = $_.path
 
         # at least one include-pattern matches?
-        (@($compiledIncludes | Where-Object { $_.IsMatch($path) })).Count -gt 0
-        -and
+        (@($compiledIncludes | Where-Object { $_.IsMatch($path) })).Count -gt 0 -and        
         # no exclude-pattern matches?
         (@($compiledExcludes | Where-Object { $_.IsMatch($path) })).Count -eq 0
         }
