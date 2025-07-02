@@ -1,7 +1,7 @@
 # Aident Business Central AI Code Reviewer
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Self-Test](https://github.com/AidentErfurt/bc-reviewer/actions/workflows/self-test.yml/badge.svg)](https://github.com/AidentErfurt/bc-reviewer/actions/workflows/self-test.yml)
+[![Self-Test](https://github.com/AidentErfurt/bc-ai-reviewer/actions/workflows/self-test.yml/badge.svg)](https://github.com/AidentErfurt/bc-reviewer/actions/workflows/self-test.yml)
 
 
 Run an **AI-powered, Business Central–specific code review** on every pull request using **OpenAI**, **Azure OpenAI** *or* **OpenRouter.ai**.
