@@ -233,16 +233,6 @@ Begin {
     }
 
     ############################################################################
-    # Helper: Convert a glob pattern to a regex
-    ############################################################################
-    
-    function Convert-GlobToRegex {
-        param([string]$Pattern)
-        $esc   = [Regex]::Escape($Pattern)
-        return '^' + ($esc -replace '\\\*\\\*', '.*' -replace '\\\*', '[^/]*') + '$'
-    }
-
-    ############################################################################
     # Helper: Parse a unified diff into file objects for review
     ############################################################################
     function Parse-Patch {
@@ -254,7 +244,7 @@ Begin {
         foreach ($line in $patch -split "`n") {
 
             # diff-header 
-            if ($line -match '^diff --git a/.+ b/(?<path>.+)$') {
+            if ($line -match '^diff\s--git\s+a\/.+\s+b\/(?<path>.+)$') {
 
                 # Push previous chunk if it contained any diff lines
                 if ($current -and $current.path -and $current.diffLines.Count) {
@@ -515,6 +505,10 @@ closingIssuesReferences(first: 50) {
     #########################################################
     
     function New-Review {
+        # guardrail for huge summaries
+        if ($review.summary.Length -gt 65000) {
+            $review.summary = $review.summary.Substring(0,65000) + "`n…(truncated)"
+        }
         $body = @{ body = $review.summary }
         $body.event = if ($ApproveReviews) { $review.suggestedAction.ToUpper() } else { 'COMMENT' }
         Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body $body
@@ -644,18 +638,17 @@ Process {
     ############################################################################
     # 4. Filter files by include/exclude patterns
     ############################################################################
-    $includeRxs = $includeGlobs | ForEach-Object { Convert-GlobToRegex $_ }
-    $excludeRxs = $excludeGlobs | ForEach-Object { Convert-GlobToRegex $_ }
+    # Pre-compile your wildcard patterns
+    $includePatterns = $includeGlobs |
+        ForEach-Object { [WildcardPattern]::Get($_, [WildcardOptions]::IgnoreCase) }
+    $excludePatterns = $excludeGlobs |
+        ForEach-Object { [WildcardPattern]::Get($_, [WildcardOptions]::IgnoreCase) }
 
+    # Use .IsMatch() to test each path
     $relevant = $files | Where-Object {
-        $p = $_.path
-
-        # wrap in @(...) so .Count is always valid
-        $hasInclude = (@($includeRxs | Where-Object { $p -match $_ })).Count -gt 0
-        $hasExclude = (@($excludeRxs | Where-Object { $p -match $_ })).Count -gt 0
-
-        # include if any include-pattern matched, AND none of the exclude-patterns matched
-        $hasInclude -and -not $hasExclude
+        $path = $_.path
+        $includePatterns .Where({ $_.IsMatch($path) }).Count -gt 0 `
+            -and $excludePatterns .Where({ $_.IsMatch($path) }).Count -eq 0
     }
 
     if (-not $relevant) {
