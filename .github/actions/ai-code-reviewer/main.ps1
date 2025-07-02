@@ -644,11 +644,15 @@ Process {
     $excludePatterns = $excludeGlobs |
         ForEach-Object { [WildcardPattern]::Get($_, [WildcardOptions]::IgnoreCase) }
 
-    # Use .IsMatch() to test each path
+    # Select only files that match at least one include-glob and no exclude-glob
     $relevant = $files | Where-Object {
         $path = $_.path
-        $includePatterns .Where({ $_.IsMatch($path) }).Count -gt 0 `
-            -and $excludePatterns .Where({ $_.IsMatch($path) }).Count -eq 0
+
+        # any include match?
+        ($includePatterns | Where-Object { $_.IsMatch($path) }).Count -gt 0 `
+        -and `
+        # no exclude match?
+        ($excludePatterns | Where-Object { $_.IsMatch($path) }).Count -eq 0
     }
 
     if (-not $relevant) {
@@ -656,11 +660,12 @@ Process {
         return
     }
 
-    $maxFiles   = 300        # worst-case 300 × 3 inline comments ≈ 900
+    # Cap number of files to avoid GitHub’s inline-comment limit
+    $maxFiles = 300 # worst-case 300 × 3 inline comments ≈ 900
     if ($relevant.Count -gt $maxFiles) {
         Write-Warning ("Limiting review to first {0} of {1} changed files " +
-                    "(GitHub API caps inline comments at 1 000)." `
-                    -f $maxFiles, $relevant.Count)
+                       "(GitHub API caps inline comments at 1 000)." `
+                       -f $maxFiles, $relevant.Count)
         $relevant = $relevant[0..($maxFiles-1)]
     }
 
