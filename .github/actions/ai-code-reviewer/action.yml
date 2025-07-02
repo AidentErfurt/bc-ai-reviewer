@@ -1,0 +1,168 @@
+name: "Business Central AI Code Reviewer"
+description: "Run an AI-powered, Business Central specific code review on a Pull Request using OpenAI, Azure OpenAI or OpenRouter.ai."
+branding:
+  icon:  'package'
+  color: 'orange'
+author: "Aident GmbH"
+version: "1.0.0"
+
+inputs:
+  GITHUB_TOKEN:
+    description: "GitHub token with repo-scope"
+    required: true
+    type: string
+
+  AI_PROVIDER:
+    description: "openai | azure | openrouter"
+    type: string
+    default: "azure"
+
+  AI_MODEL:
+    description: "Model or deployment name"
+    type: string
+    default: "gpt-4o-mini"
+
+  AI_API_KEY:
+    description: "OpenAI API key (required if provider=openai | openrouter)"
+    type: string
+    required: false
+
+  AZURE_ENDPOINT:
+    description: "Azure OpenAI endpoint (required if provider=azure)"
+    type: string
+    required: false
+
+  AZURE_API_KEY:
+    description: "Azure OpenAI API key (required if provider=azure)"
+    type: string
+    required: false
+
+  AZURE_API_VERSION:
+    description: "Azure OpenAI API version"
+    type: string
+    default: "2024-05-01-preview"
+
+  # Review behaviour
+  APPROVE_REVIEWS:
+    description: "Let the bot approve / request-changes"
+    type: boolean
+    default: false
+
+  MAX_COMMENTS:
+    description: "Hard cap on inline comments (0 = unlimited)"
+    type: number
+    default: 10
+
+  BASE_PROMPT_EXTRA:
+    description: "Free-form text injected into the system prompt (optional)"
+    type: string
+    default: ""
+
+  # Context customization
+  PROJECT_CONTEXT:
+    description: "Architecture / guidelines text"
+    type: string
+    default: ""
+
+  CONTEXT_FILES:
+    description: "Comma-separated globs fetched for context"
+    type: string
+    default: ""
+
+  INCLUDE_PATTERNS:
+    description: "Comma-separated globs to include in review"
+    type: string
+    default: "**/*.al,**/*.xlf,**/*.json"
+
+  EXCLUDE_PATTERNS:
+    description: "Comma-separated globs to exclude"
+    type: string
+    default: ""
+  
+  # Fetch linked issues
+  ISSUE_COUNT:
+    description: "Max linked issues to fetch (0 = all)"
+    type: number
+    default: 0
+
+  FETCH_CLOSED_ISSUES:
+    description: "Include closed issues as context"
+    type: boolean
+    default: true
+
+  # Git diff context
+  DIFF_CONTEXT_LINES:
+    description: "Number of context lines for git diff --unified"
+    default: 5
+
+  AUTO_DETECT_APPS:
+    description: "Enable automatic app.json discovery"
+    type: boolean
+    default: true
+
+  INCLUDE_APP_PERMISSIONS:
+    description: "Include *.PermissionSet.al / *.Entitlement.al from each app"
+    type: boolean
+    default: true
+
+  INCLUDE_APP_MARKDOWN:
+    description: "Include *.md files from each app"
+    type: boolean
+    default: true
+
+  # Guidelines
+  GUIDELINE_RULES_PATH:
+    description: "Path to JSON or PSD1 file defining custom AL-Guideline rules"
+    type: string
+    required: false
+    default: ""
+
+  DISABLE_GUIDELINEDOCS:
+    description: "Skip fetching the official AL-Guidelines docs"
+    type: boolean
+    default: false
+
+runs:
+  using: composite
+  steps:
+    - name: Run AI Code Review
+      shell: pwsh
+      env:
+        OPENAI_API_KEY: ${{ inputs.AI_API_KEY }}
+        AZURE_OPENAI_API_KEY: ${{ inputs.AZURE_API_KEY }}
+      run: |
+        . '${{ github.action_path }}/main.ps1'
+
+        # build parameter splat 
+        $p = @{
+          GitHubToken      = '${{ inputs.GITHUB_TOKEN }}'
+          Provider         = '${{ inputs.AI_PROVIDER }}'
+          Model            = '${{ inputs.AI_MODEL }}'
+          MaxComments      = [int]${{ inputs.MAX_COMMENTS }}
+          ProjectContext   = '${{ inputs.PROJECT_CONTEXT }}'
+          ContextFiles     = '${{ inputs.CONTEXT_FILES }}'
+          IncludePatterns  = '${{ inputs.INCLUDE_PATTERNS }}'
+          ExcludePatterns  = '${{ inputs.EXCLUDE_PATTERNS }}'
+          IssueCount       = [int]${{ inputs.ISSUE_COUNT }}
+          AutoDetectApps        = [bool]::Parse('${{ inputs.AUTO_DETECT_APPS }}')
+          IncludeAppPermissions = [bool]::Parse('${{ inputs.INCLUDE_APP_PERMISSIONS }}')
+          IncludeAppMarkdown    = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
+          BasePromptExtra = '${{ inputs.BASE_PROMPT_EXTRA }}'
+          GuidelineRulesPath     = '${{ inputs.GUIDELINE_RULES_PATH }}'
+        }
+
+        # switches 
+        if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true')  { $p.ApproveReviews  = $true }
+        if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }
+
+        # provider-specific credentials
+        if ($p.Provider -in @('openai','openrouter')) {
+            $p.ApiKey = $Env:OPENAI_API_KEY
+        }
+        else {
+            $p.AzureEndpoint   = '${{ inputs.AZURE_ENDPOINT }}'
+            $p.AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
+            $p.AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
+        }
+
+        Invoke-AICodeReview @p
