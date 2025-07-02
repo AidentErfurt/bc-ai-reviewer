@@ -638,11 +638,22 @@ Process {
     ############################################################################
     # 4. Filter files by include/exclude patterns
     ############################################################################
-    # Pre-compile your wildcard patterns
+    # Pre-compile your wildcard patterns once, using the fully-qualified enum
     $includePatterns = $includeGlobs |
-        ForEach-Object { [WildcardPattern]::Get($_, [WildcardOptions]::IgnoreCase) }
+        ForEach-Object { 
+            [WildcardPattern]::Get(
+                $_, 
+                [System.Management.Automation.WildcardOptions]::IgnoreCase
+            ) 
+        }
+
     $excludePatterns = $excludeGlobs |
-        ForEach-Object { [WildcardPattern]::Get($_, [WildcardOptions]::IgnoreCase) }
+        ForEach-Object { 
+            [WildcardPattern]::Get(
+                $_, 
+                [System.Management.Automation.WildcardOptions]::IgnoreCase
+            ) 
+        }
 
     # Select only files that match at least one include-glob and no exclude-glob
     $relevant = $files | Where-Object {
@@ -661,13 +672,14 @@ Process {
     }
 
     # Cap number of files to avoid GitHub’s inline-comment limit
-    $maxFiles = 300 # worst-case 300 × 3 inline comments ≈ 900
+    $maxFiles = 300
     if ($relevant.Count -gt $maxFiles) {
         Write-Warning ("Limiting review to first {0} of {1} changed files " +
-                       "(GitHub API caps inline comments at 1 000)." `
+                       "(GitHub caps inline comments at 1000)." `
                        -f $maxFiles, $relevant.Count)
-        $relevant = $relevant[0..($maxFiles-1)]
+        $relevant = $relevant[0..($maxFiles - 1)]
     }
+
 
     ###########################################################################
     # 5. Autodetect app context
