@@ -657,7 +657,8 @@ Process {
         }
 
     # Now select only those files that match ≥1 include-pattern and 0 exclude-patterns:
-    $relevant = $files | Where-Object {
+    $relevant = @(
+        $files | Where-Object {
         $path = $_.path
 
         # at least one include-pattern matches?
@@ -665,7 +666,8 @@ Process {
         -and
         # no exclude-pattern matches?
         ($compiledExcludes | Where-Object { $_.IsMatch($path) }).Count -eq 0
-    }
+        }
+    )
 
     if (-not $relevant) {
         Write-Host 'No relevant files to review'
