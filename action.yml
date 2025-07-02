@@ -131,7 +131,7 @@ runs:
         OPENAI_API_KEY: ${{ inputs.AI_API_KEY }}
         AZURE_OPENAI_API_KEY: ${{ inputs.AZURE_API_KEY }}
       run: |
-        . '${{ github.action_path }}/main.ps1'
+        . '${{ github.action_path }}/scripts/main.ps1'
 
         # build parameter splat 
         $p = @{
