@@ -128,6 +128,8 @@ runs:
     - name: Run AI Code Review
       shell: pwsh
       env:
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_EVENT_PATH:  ${{ github.event_path }}
         OPENAI_API_KEY: ${{ inputs.AI_API_KEY }}
         AZURE_OPENAI_API_KEY: ${{ inputs.AZURE_API_KEY }}
       run: |
