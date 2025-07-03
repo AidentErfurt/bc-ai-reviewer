@@ -500,7 +500,7 @@ closingIssuesReferences(first: 50) {
     }
 
     #########################################################
-    # Helper to create the *summary* review only
+    # Helper: to create the *summary* review only
     #########################################################
     
     function New-Review {
@@ -511,6 +511,37 @@ closingIssuesReferences(first: 50) {
         $body = @{ body = $review.summary }
         $body.event = if ($ApproveReviews) { $review.suggestedAction.ToUpper() } else { 'COMMENT' }
         Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body $body
+    }
+
+    #######################################################################
+    # Helper: turns the raw model string into a PowerShell object #
+    #######################################################################
+    function Convert-FromAiJson {
+        param(
+            [Parameter(Mandatory)][string]$Raw,
+            [int]$MaxAttempts = 5
+        )
+
+        # First pass: naive “\ → \\” for obviously invalid sequences
+        $json = $Raw -replace '\\(?!["\\/bfnrtu])', '\\\\'
+
+        for ($try = 1; $try -le $MaxAttempts; $try++) {
+            try { return $json | ConvertFrom-Json }
+            catch {
+                if ($_.Exception.Message -notmatch 'Bad JSON escape sequence: \\(.)') { throw }
+
+                # Grab the offending character the parser complains about
+                $badChar = $Matches[1]
+
+                # Double the *final* back-slash of every run that ends with \<badChar>
+                $pat   = "(?<!\\)(?:\\\\\\\\)*\\$badChar"
+                $json  = [regex]::Replace($json, $pat, { param($m) ('\' + $m.Value) }, 1)
+
+                Write-Verbose "Retry #$try - escaped `\{0}``" -f $badChar
+            }
+        }
+
+        throw "Failed to sanitise AI response after $MaxAttempts attempts."
     }
 
     ############################################################################
@@ -961,7 +992,7 @@ Example of an empty-but-valid result:
     $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
 
     try {
-    $review = $raw | ConvertFrom-Json
+        $review = Convert-FromAiJson -Raw $raw
     }
     catch {
         Write-Verbose 'JSON parse failed. Attempting back-slash escape fix'
