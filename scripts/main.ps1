@@ -538,7 +538,7 @@ closingIssuesReferences(first: 50) {
                 $pat   = "(?<!\\)(?:\\\\\\\\)*\\$badChar"
                 $json  = [regex]::Replace($json, $pat, { param($m) ('\' + $m.Value) }, 1)
 
-                Write-Verbose "Retry #$try - escaped `\{0}``" -f $badChar
+                Write-Verbose ("Retry #{0} - escaped `\{1}``" -f $try, $badChar)
             }
         }
 
