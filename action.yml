@@ -156,6 +156,7 @@ runs:
           IncludeAppMarkdown    = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
           BasePromptExtra = '${{ inputs.BASE_PROMPT_EXTRA }}'
           GuidelineRulesPath     = '${{ inputs.GUIDELINE_RULES_PATH }}'
+          DiffContextLines = '${{ inputs.DIFF_CONTEXT_LINES }}'
         }
 
         # switches 

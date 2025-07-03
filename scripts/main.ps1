@@ -1,14 +1,14 @@
 <#
 Copyright 2025 Aident GmbH
 
-Licensed under the Apache License, Version 2.0 (the “License”);
+Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an “AS IS” BASIS,
+distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
@@ -276,7 +276,7 @@ mutation (
     }
 
     function Add-ReviewThread {
-        param($ReviewId,$CommitOid,$Path,[int]$Line = $null,[string]$Body,[string]$Side='RIGHT')
+        param($ReviewId,$CommitOid,$Path,[Nullable[int]]$Line = $null,[string]$Body,[string]$Side='RIGHT')
 $gql = @"
 mutation (
   `$rid:ID!,`$sha:GitObjectID!,`$path:String!,`$ln:Int!,`$side:DiffSide!,`$body:String!){
@@ -523,8 +523,7 @@ closingIssuesReferences(first: 50) {
             [int]$MaxAttempts = 5
         )
 
-        # First pass: naive “\ → \\” for obviously invalid sequences
-        $json = $Raw -replace '\\(?!["\\/bfnrtu])', '\\\\'
+        $json = $Raw
 
         for ($try = 1; $try -le $MaxAttempts; $try++) {
             try { return $json | ConvertFrom-Json }
@@ -534,9 +533,9 @@ closingIssuesReferences(first: 50) {
                 # Grab the offending character the parser complains about
                 $badChar = $Matches[1]
 
-                # Double the *final* back-slash of every run that ends with \<badChar>
-                $pat   = "(?<!\\)(?:\\\\\\\\)*\\$badChar"
-                $json  = [regex]::Replace($json, $pat, { param($m) ('\' + $m.Value) }, 1)
+                # Back-slash not already doubled AND not followed by ["\/bfnrtu]
+                $pat = '(?<!\\)\\(?![\\/"bfnrtu])'
+                $json = [regex]::Replace($json, $pat, '\\$&')
 
                 Write-Verbose ("Retry #{0} - escaped `\{1}``" -f $try, $badChar)
             }
@@ -979,6 +978,7 @@ $BasePromptExtra
 * If you find nothing, set `"comments": []`.
 * Keep acknowledgments short and neutral.
 * Output GitHub-flavoured Markdown inside `"comment"` fields only.
+* Return **valid JSON**. Inside "comment" fields you may use Markdown but MUST escape every \ as \\\\.
 
 Focus exclusively on the code: naming, performance, events/trigger usage, filters,
 record locking, permission/entitlement changes, UI strings (tone & BC terminology).
