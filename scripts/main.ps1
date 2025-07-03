@@ -1004,19 +1004,23 @@ Example of an empty-but-valid result:
     # Build inline comment objects
     $inline = @(
         foreach ($c in $review.comments) {
-            $f = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
-            if (-not $f) { continue }
 
-            $idx = [int]$c.line - 1
-            if ($idx -lt $f.lineMap.Count) {
+            $f = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
+            if (-not $f) { continue }            # file not in diff?  skip
+
+            # $f.lineMap: index = 0-based position in patch
+            #             value = 1-based line-no in new file
+            $pos = $f.lineMap.IndexOf([int]$c.line)   # locate requested file-line
+
+            if ($pos -ge 0) {
                 [pscustomobject]@{
-                    path = $c.path
-                    line = $f.lineMap[$idx]   # already diff-relative & 1-based
-                    side = 'RIGHT'
-                    body = $c.comment
+                    path     = $c.path
+                    position = $pos + 1          # GitHub wants 1-based position
+                    body     = $c.comment
                 }
-            } else {
-                Write-Verbose "Line $($c.line) not in diff. Skipping comment."
+            }
+            else {
+                Write-Verbose "Line $($c.line) not in diff. Skipping."
             }
         }
     )

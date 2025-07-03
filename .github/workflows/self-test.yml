@@ -26,7 +26,8 @@ jobs:
           AI_PROVIDER:         openrouter
           AI_MODEL:            microsoft/mai-ds-r1:free
           AI_API_KEY:          ${{ secrets.OPENROUTER_API_KEY }}
-          MAX_COMMENTS:        5
+          MAX_COMMENTS:        0
+          DIFF_CONTEXT_LINES:  0
           APPROVE_REVIEWS:     false
 
           # --- tailor the prompt & context ---
