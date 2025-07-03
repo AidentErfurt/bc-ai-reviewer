@@ -240,69 +240,74 @@ Begin {
 
         $files   = @()
         $current = $null
+        $newLine = 0
+        $diffPos = -1          # 0-based position inside each hunk
 
         foreach ($line in $patch -split "`n") {
 
-            # diff-header 
+            # ── new file diff ───────────────────────────────────────────────
             if ($line -match '^diff\s--git\s+a\/.+\s+b\/(?<path>.+)$') {
 
-                # Push previous chunk if it contained any diff lines
                 if ($current -and $current.path -and $current.diffLines.Count) {
-                    $files += $current
+                    $files += $current      # flush previous chunk
                 }
 
-                # Start new chunk
                 $current = [ordered]@{
                     path      = $Matches.path
                     diffLines = @()
-                    mappings  = @()
+                    mappings  = @{}         # new-file line → diff position
                 }
                 $newLine = 0
+                $diffPos = -1
                 continue
             }
 
-            # No active chunk yet -> skip
-            if (-not $current) { continue }
+            if (-not $current) { continue }  # we’re still before the first diff
 
-            # collect diff text
-            $current.diffLines += $line
+            $current.diffLines += $line      # keep full diff text for the prompt
 
-            # Track the “+<new>,<count>” header             (@@ -12,7 +15,8 @@)
-            if ($line -match '^@@ -\d+(?:,\d+)? \+(?<new>\d+)(?:,(?<cnt>\d+))? @@') {
+            # ── hunk header  (@@ -12,7 +15,8 @@)  ──────────────────────────
+            if ($line -match '^@@ -\d+(?:,\d+)? \+(?<new>\d+)(?:,\d+)? @@') {
                 $newLine = [int]$Matches.new
+                $diffPos = -1               # reset position counter per hunk
                 continue
             }
 
-            # Only the three real diff line types count towards GitHub's line numbers
-            if (-not $line) { continue }
+            if ($line.Length -eq 0) { continue }
 
             switch ($line[0]) {
-                '+' {              # insertion
-                    $current.mappings += $newLine
+
+                '+' {                       # insertion → appears in new file
+                    $diffPos++
+                    $current.mappings[$newLine] = $diffPos
                     $newLine++
                 }
-                ' ' {              # unchanged / context
-                    $current.mappings += $newLine
+
+                ' ' {                       # context   → still present
+                    $diffPos++
+                    $current.mappings[$newLine] = $diffPos
                     $newLine++
                 }
-                '-' {              # deletion – $newLine stays unchanged
+
+                '-' {                       # deletion  → not in new file
+                    $diffPos++              # …but it *does* occupy a diff line
                 }
-                default {          # everything else (\, file headers, blank, etc.)
-                }
+
+                default { }                 # headers (---, +++, \ No newline…) – ignore
             }
         }
 
-        # Tail-piece
+        # tail-piece
         if ($current -and $current.path -and $current.diffLines.Count) {
             $files += $current
         }
 
-        # Return simple objects for the AI prompt
+        # emit simple objects for the AI prompt
         foreach ($f in $files) {
             [pscustomobject]@{
                 path    = $f.path
                 diff    = "```diff`n$($f.diffLines -join "`n")`n````"
-                lineMap = $f.mappings
+                lineMap = $f.mappings       # hashtable: new-file line → position
             }
         }
     }
@@ -980,26 +985,23 @@ Example of an empty-but-valid result:
     # Build inline comment objects
     $inline = @(
         foreach ($c in $review.comments) {
+            $file = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
+            if (-not $file) { continue }     # not part of diff -> skip
 
-            $f = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
-            if (-not $f) { continue }            # file not in diff?  skip
-
-            # $f.lineMap: index = 0-based position in patch
-            #             value = 1-based line-no in new file
-            $pos = $f.lineMap.IndexOf([int]$c.line)   # locate requested file-line
-
-            if ($pos -ge 0) {
+            # $file.lineMap   = [ordered]@{ newFileLine => diffPosition0Based }
+            $pos = $file.lineMap[[int]$c.line]  # hashtable lookup, NOT IndexOf, returns the 0-based diff position
+            if ($null -ne $pos) {
                 [pscustomobject]@{
                     path     = $c.path
-                    position = $pos + 1          # GitHub wants 1-based position
+                    position = $pos          # already 0-based
                     body     = $c.comment
                 }
-            }
-            else {
-                Write-Verbose "Line $($c.line) not in diff. Skipping."
+            } else {
+                Write-Verbose "Line $($c.line) not in diff for $($c.path)."
             }
         }
     )
+
 
     # Cap inline comments only if a positive limit is specified (0 = unlimited)
     if ($MaxComments -gt 0) {
