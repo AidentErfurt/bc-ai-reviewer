@@ -27,7 +27,7 @@ jobs:
           AI_MODEL:            microsoft/mai-ds-r1:free
           AI_API_KEY:          ${{ secrets.OPENROUTER_API_KEY }}
           MAX_COMMENTS:        10
-          DIFF_CONTEXT_LINES:  9999
+          DIFF_CONTEXT_LINES:  100
           APPROVE_REVIEWS:     false
 
           # --- tailor the prompt & context ---

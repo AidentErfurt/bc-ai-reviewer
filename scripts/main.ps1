@@ -608,6 +608,9 @@ Process {
     $headRef = $pr.head.sha
 
     # run git diff with x lines of context, rename detection and no colour codes
+    if ($DiffContextLines -lt 0 -or $DiffContextLines -gt 100) {
+        throw "DIFF_CONTEXT_LINES must be between 0 and 100 (gh api limits)."
+    }
     Write-Host "Generating diff with $DiffContextLines lines of context..."
     $patch = (& git diff --unified=$DiffContextLines --find-renames --no-color $baseRef $headRef | Out-String)
 

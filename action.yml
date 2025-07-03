@@ -49,7 +49,10 @@ inputs:
     default: false
 
   MAX_COMMENTS:
-    description: "Hard cap on inline comments (0 = unlimited)"
+    description: |
+      Maximum inline comments to post.
+      0 = unlimited, but GitHub caps a single review at 100 comments
+      and a PR at 1000 total.
     type: number
     default: 10
 
@@ -92,7 +95,9 @@ inputs:
 
   # Git diff context
   DIFF_CONTEXT_LINES:
-    description: "Number of context lines for git diff --unified"
+    description: |
+      Lines of unchanged context to keep around each diff hunk.
+      GitHub allows 0-100; 0 = no context, 100 ≈ full file.
     default: 5
 
   AUTO_DETECT_APPS:
