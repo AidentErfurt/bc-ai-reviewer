@@ -4,16 +4,50 @@
 [![Self-Test](https://github.com/AidentErfurt/bc-ai-reviewer/actions/workflows/self-test.yml/badge.svg)](https://github.com/AidentErfurt/bc-reviewer/actions/workflows/self-test.yml)
 
 
-Run an **AI-powered, Business Central–specific code review** on every pull request using **OpenAI**, **Azure OpenAI** *or* **OpenRouter.ai**.
+Run an **AI-powered, Business Central-specific code review** on every pull request using **OpenAI**, **Azure OpenAI** *or* **OpenRouter.ai**.
 The action fetches the PR diff, optional context files, and any referenced issues, sends them to the LLM, then posts a summary review and granular inline comments right on the PR.
 
 **Highlights**
 
-* Context-aware reviews: automatically pulls in `app.json`, permission sets, entitlements, READMEs/other `.md` docs, the latest Microsoft [AL-Guidelines](https://github.com/microsoft/alguidelines) pages *and* any issues/discussions referenced in the PR.
-* Works with **Azure OpenAI**, **OpenAI** endpoints **and OpenRouter.ai** – choose the provider/model that fits your budget.
+* Context-aware reviews: automatically pulls in `app.json`, permission sets, entitlements, READMEs/other `.md` docs, the latest Microsoft [AL-Guidelines](https://github.com/microsoft/alguidelines) pages and any issues/discussions referenced in the PR.
+* Works with **Azure OpenAI**, **OpenAI** endpoints **and OpenRouter.ai**. Choose the provider/model that fits your budget.
 * Reviews are **incremental**: the bot ignores already-addressed feedback and comments only on new changes.
 * Hard cap for inline-comment noise (`MAX_COMMENTS`).
 * Fully configurable file-glob **include / exclude** filters.
+
+## 🔧 Inputs
+
+| Name                      | Required         | Default                      | Description                                                                               |         |              |
+| ------------------------- | ---------------- | ---------------------------- | ----------------------------------------------------------------------------------------- | ------- | ------------ |
+| `GITHUB_TOKEN`            | **yes**          | —                            | GitHub token with repo scope                                                              |         |              |
+| `AI_PROVIDER`             | no               | `azure`                      | `openai`                                                                                  | `azure` | `openrouter` |
+| `AI_MODEL`                | no               | `gpt-4o-mini`                | Model or deployment name                                                                  |         |              |
+| `AI_API_KEY`              | no (conditional) | —                            | OpenAI API key (required if provider = `openai` or `openrouter`)                          |         |              |
+| `AZURE_ENDPOINT`          | no (conditional) | —                            | Azure OpenAI endpoint (required if provider = `azure`)                                    |         |              |
+| `AZURE_API_KEY`           | no (conditional) | —                            | Azure OpenAI API key (required if provider = `azure`)                                     |         |              |
+| `AZURE_API_VERSION`       | no               | `2024-05-01-preview`         | Azure OpenAI API version                                                                  |         |              |
+| `MAX_COMMENTS`            | no               | `10`                         | Hard cap on inline comments (0 = unlimited)                                               |         |              |
+| `BASE_PROMPT_EXTRA`       | no               | `""`                         | Free-form text injected into the system prompt (optional)                                 |         |              |
+| `PROJECT_CONTEXT`         | no               | `""`                         | Architecture/guidelines context for the AI                                                |         |              |
+| `CONTEXT_FILES`           | no               | `""`                         | Comma-separated globs whose contents are always fetched as context                        |         |              |
+| `INCLUDE_PATTERNS`        | no               | `**/*.al,**/*.xlf,**/*.json` | Comma-separated globs of files to include in the review                                   |         |              |
+| `EXCLUDE_PATTERNS`        | no               | `""`                         | Comma-separated globs of files to exclude from the review                                 |         |              |
+| `ISSUE_COUNT`             | no               | `0`                          | Max linked issues to fetch (0 = all)                                                      |         |              |
+| `FETCH_CLOSED_ISSUES`     | no               | `true`                       | Include closed issues when gathering issue context                                        |         |              |
+| `DIFF_CONTEXT_LINES`      | no               | `5`                          | Number of context lines passed to `git diff --unified`                                    |         |              |
+| `AUTO_DETECT_APPS`        | no               | `true`                       | Enable automatic discovery of `app.json` files to improve AI context                                            |         |              |
+| `INCLUDE_APP_PERMISSIONS` | no               | `true`                       | If auto-detecting apps, include `*.PermissionSet.al` and `*.Entitlement.al` from each app |         |              |
+| `INCLUDE_APP_MARKDOWN`    | no               | `true`                       | If auto-detecting apps, include `*.md` files from each app                                |         |              |
+| `GUIDELINE_RULES_PATH`    | no               | `""`                         | Path to a JSON or PSD1 file defining custom AL-Guideline rules                            |         |              |
+| `DISABLE_GUIDELINEDOCS`   | no               | `false`                      | Skip fetching the official Microsoft AL-Guidelines documentation                          |         |              |
+
+## 🛠 How it works
+
+1. The script detects the PR, gathers the diff and any previously addressed feedback.
+2. Optional **context files** and **linked issues** (`#123` in the PR description) are fetched.
+3. A structured prompt is sent to the chosen LLM.
+4. The response (JSON) is parsed; a summary review + inline comments are posted via the GitHub REST API.
+5. Subsequent runs only re-review commits newer than the last bot review.
 
 ## 📦 Usage
 
@@ -93,9 +127,8 @@ jobs:
 
 | Why you’d use this example               | What it does                                                                                                                              |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **You just want to try the action quickly** | Uses the out-of-the-box defaults – no prompt tweaking, no file filters, no extra context.                                                 |
+| **You just want to try the action quickly** | Uses the out-of-the-box defaults - no prompt tweaking, no file filters, no extra context.                                                 |
 | **You have an OpenRouter.ai API key**       | Points the reviewer at [OpenRouter](https://openrouter.ai/) (`AI_PROVIDER: openrouter`) with only **three** required parameters: model name, API key, and provider. |
-| **You want it on every pull request**       | The workflow triggers on *all* PR events (`on: pull_request`) across all branches.                                                        |
 
 ```yml
 name: AI Review (OpenRouter - minimal)
@@ -119,7 +152,6 @@ jobs:
         with:
           GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
 
-          # the only three AI inputs you need
           AI_PROVIDER:   openrouter
           AI_MODEL:      microsoft/mai-ds-r1:free
           AI_API_KEY:    ${{ secrets.OPENROUTER_API_KEY }}
@@ -182,38 +214,6 @@ jobs:
           AUTO_DETECT_APPS:    true    # enable app.json discovery
           INCLUDE_PATTERNS: "**/*.al,**/*.rdlc,**/*.json"
 ```
-
-## 🔧 Inputs
-
-| Name                  | Required                                               | Default                      | Description                                                               |
-| --------------------- | ------------------------------------------------------ | ---------------------------- | ------------------------------------------------------------------------- |
-| `GITHUB_TOKEN`        | **yes**                                                | -                            | Token with `contents:read`, `pull-requests:write`, **`issues:read`**      |
-| `AI_PROVIDER`         | no                                                     | `azure`                      | `openai` \| `azure` \| `openrouter`                                       |
-| `AI_MODEL`            | no                                                     | `gpt-4o-mini`                | Model name (OpenAI/OpenRouter) or deployment name (Azure)                 |
-| `AI_API_KEY`          | required when `AI_PROVIDER` = `openai` or `openrouter` | -                            | Public OpenAI key or OpenRouter key                                       |
-| `AZURE_ENDPOINT`      | required when `AI_PROVIDER` = `azure`                  | -                            | Azure OpenAI endpoint URL                                                 |
-| `AZURE_API_KEY`       | required when `AI_PROVIDER` = `azure`                  | -                            | Azure OpenAI key                                                          |
-| `AZURE_API_VERSION`   | no                                                     | `2024-05-01-preview`         | Azure API version                                                         |
-| `MAX_COMMENTS`        | no                                                     | `0`                          | Hard cap for inline comments (0 = unlimited)                              |
-| `PROJECT_CONTEXT`     | no                                                     | `""`                         | Free-form architectural tips for the model                                |
-| `CONTEXT_FILES`       | no                                                     | `README.md`                  | Comma-separated globs always provided to the model                        |
-| `INCLUDE_PATTERNS`    | no                                                     | `**/*.al,**/*.xlf,**/*.json` | Files to consider in review                                               |
-| `EXCLUDE_PATTERNS`    | no                                                     | `""`                         | Globs to ignore                                                           |
-| `ISSUE_COUNT`         | no                                                     | `0`                          | Max linked issues to fetch (`0` = all)                                    |
-| `FETCH_CLOSED_ISSUES` | no                                                     | `true`                       | Include closed issues in 
-| `BASE_PROMPT_EXTRA` | no       | `""`    | Extra text inserted into the system prompt *before* the hard-coded JSON-response instructions |
-| `GUIDELINE_RULES_PATH` | no                                                   | `""`                                          | Path to JSON or PSD1 file defining custom AL-Guideline rules                                  |
-| `DISABLE_GUIDELINEDOCS`| no                                                   | `false`                                       | Skip fetching the official Microsoft AL-Guidelines docs                                       |
-
-> **Note:** There are **no outputs**; all feedback is posted directly to the PR.
-
-## 🛠 How it works
-
-1. The script detects the PR, gathers the diff and any previously addressed feedback.
-2. Optional **context files** and **linked issues** (`#123` in the PR description) are fetched.
-3. A structured prompt is sent to the chosen LLM.
-4. The response (JSON) is parsed; a summary review + inline comments are posted via the GitHub REST API.
-5. Subsequent runs only re-review commits newer than the last bot review.
 
 ## 💬 Contributing
 
