@@ -987,7 +987,11 @@ Example of an empty-but-valid result:
     # 8. Build inline comment objects
     ########################################################################
 
-    $review.comments = $review.comments[0..($MaxComments-1)]
+    # keep at most $MaxComments, but only slice when needed
+    if ($MaxComments -gt 0 -and $review.comments.Count -gt $MaxComments) {
+        $review.comments = $review.comments[0..($MaxComments-1)]
+    }
+    
     $inline = @(
         foreach ($c in $review.comments) {
 
