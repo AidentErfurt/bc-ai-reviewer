@@ -612,6 +612,7 @@ closingIssuesReferences(first: 50) {
                 diff     = "```diff`n$($_.diff -join "`n")`n````"
                 leftMap  = $_.leftMap
                 rightMap = $_.rightMap
+                diffLines = $_.diff
             }
         }
     }
@@ -1079,7 +1080,7 @@ Example of an empty-but-valid result:
         # Did the model point at a *deleted* line?
         if ($file.rightMap.ContainsKey($ln)) {
             $side = 'RIGHT'
-        } elseif ($file.leftMap[$ln]) {
+        } elseif ($file.leftMap.ContainsKey($ln)) {
             $side = 'LEFT'
         } else {
             Write-Verbose "Skipping unknown line $ln in $($file.path)"
