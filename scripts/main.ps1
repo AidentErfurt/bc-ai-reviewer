@@ -234,7 +234,15 @@ Begin {
 
     function Invoke-GitHubGraphQL {
         param([string]$Query,[Hashtable]$Variables)
-        Invoke-GitHub -Method POST -Path '/graphql' -Body @{ query=$Query; variables=$Variables }
+
+        $resp = Invoke-GitHub -Method POST -Path '/graphql' `
+                -Body @{ query=$Query; variables=$Variables }
+
+        if ($resp.PSObject.Properties['errors']) {
+            $msg = ($resp.errors | ConvertTo-Json -Depth 5)
+            throw "GitHub GraphQL error:`n$msg"
+        }
+        return $resp
     }
 
     function Get-PRGraphMeta {
@@ -261,7 +269,6 @@ mutation (
     pullRequestId:\$pr
     commitOID:     \$sha
     body:          \$body
-    event:         COMMENT   # keep PENDING so we can add threads
   }){ pullRequestReview{ id url } }
 }
 "@
@@ -269,7 +276,7 @@ mutation (
     }
 
     function Add-ReviewThread {
-        param($ReviewId,$CommitOid,$Path,[int]$Line,[string]$Body,[string]$Side='RIGHT')
+        param($ReviewId,$CommitOid,$Path,[int]$Line = $null,[string]$Body,[string]$Side='RIGHT')
 $gql = @"
 mutation (
   \$rid:ID!,\$sha:GitObjectID!,\$path:String!,\$ln:Int!,\$side:DiffSide!,\$body:String!){
@@ -874,7 +881,7 @@ Process {
 
         foreach ($f in $files) {
             $norm = Convert-PatchToCode -Patch ( $f.diffLines -join "`n" )
-            Write-Host '::group::file'
+            Write-Host '::group::patch'
             Write-Host $norm.Text
             Write-Host '::endgroup::'
             $triggers = Get-TriggeredGuidelines -Patch $norm.Text
@@ -1102,15 +1109,7 @@ Example of an empty-but-valid result:
     # # 9. Create review
     # ########################################################################
 
-    # try {
-    #     Submit-Review -comments $inline
-    # } catch {
-    #     Write-Warning "Submitting inline comments failed: $_  - falling back to summary-only"
-    # }
-
     # Write-Host "Review complete for PR #$prNumber"
-
-     # region ─────────── 9. Post review via GraphQL  ────────────────────────
 
     $meta = Get-PRGraphMeta -Owner $owner -Repo $repo -PrNumber $prNumber
     $pullId    = $meta.id
