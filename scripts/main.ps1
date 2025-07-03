@@ -960,7 +960,18 @@ Example of an empty-but-valid result:
     # This turns \s into \\s (which JSON then interprets as the literal characters \ + s) without touching \n or \".
     $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
 
+    try {
     $review = $raw | ConvertFrom-Json
+    }
+    catch {
+        Write-Verbose 'JSON parse failed. Attempting back-slash escape fix'
+
+        # Double any back-slash that is *not* already escaped (\ -> \\)
+        $fixed = $raw -replace '(?<!\\)\\(?![\\/"bfnrtu])', '\\\\'
+
+        # Retry the parse (will still throw if JSON is truly broken)
+        $review = $fixed | ConvertFrom-Json
+    }
     $review.summary += "`n`n------`n`n_Code review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model._"
 
     ########################################################################
