@@ -964,50 +964,47 @@ Example of an empty-but-valid result:
     $review.summary += "`n`n------`n`n_Code review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model._"
 
     ########################################################################
-    # 8. Map inline comments & submit review
+    # 8. Build inline comment objects
     ########################################################################
 
-    # Build inline comment objects
     $inline = @(
         foreach ($c in $review.comments) {
+
             $file = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
-            if (-not $file) { continue }     # not part of diff -> skip
+            if (-not $file) { continue }       # not part of diff
 
-            # $file.lineMap   = [ordered]@{ newFileLine => diffPosition0Based }
-            $pos = $file.lineMap[[int]$c.line]  # hashtable lookup, NOT IndexOf, returns the 0-based diff position
+            $newLine = [int]$c.line            # what the model sent
+            $isReal  = $file.lineMap.ContainsKey($newLine)
 
-            if (-not $file.lineMap.ContainsKey([int]$c.line)) {
-                # If Model actually sent a raw diff position, accept it
-                if ([int]$c.line -ge 1 -and [int]$c.line -le $file.diffLines.Count) {
-                    $pos = [int]$c.line
+            # ----------------------------------------------------------------
+            # Case A –– model gave a *new-file* line number  -> use line/side
+            # ----------------------------------------------------------------
+            if ($isReal) {
+                [pscustomobject]@{
+                    path = $c.path
+                    line = $newLine          # 1-based new-file line
+                    side = 'RIGHT'           # always the “after” side
+                    body = $c.comment
                 }
-                else {
-                    Write-Verbose "Model requested unknown line $($c.line) in $($c.path) -> skipped."
-                    continue
-                }
-            }
-            else {
-                $pos = $file.lineMap[[int]$c.line]
+                continue
             }
 
-            # fallback: model gave a diff-line position instead of new-file line
-            if ($null -eq $pos -and
-                [int]$c.line -ge 1 -and
-                [int]$c.line -lt $file.diffLines.Count) {
-                $pos = [int]$c.line            # GitHub expects 1-based already
-            }
-
-            if ($null -ne $pos) {
+            # ----------------------------------------------------------------
+            # Case B –– maybe it actually sent a raw diff position?
+            # ----------------------------------------------------------------
+            if ($newLine -ge 1 -and $newLine -le $file.diffLines.Count) {
                 [pscustomobject]@{
                     path     = $c.path
-                    position = $pos      # already 1-based
+                    position = $newLine      # raw patch position
                     body     = $c.comment
                 }
-            } else {
-                Write-Verbose "Line $($c.line) not in diff for $($c.path)."
+                continue
             }
+
+            Write-Verbose "Model requested unknown line $($c.line) in $($c.path) -> skipped."
         }
     )
+
 
 
     # Cap inline comments only if a positive limit is specified (0 = unlimited)
