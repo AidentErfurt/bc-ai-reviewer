@@ -1006,9 +1006,17 @@ Example of an empty-but-valid result:
         foreach ($c in $review.comments) {
             $f = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
             if (-not $f) { continue }
-            $idx = [int]$c.line - 1
-            if ($idx -lt $f.lineMap.Count) {
-                @{ path = $c.path; line = $f.lineMap[$idx]; side = 'RIGHT'; body = $c.comment }
+
+            $pos = $f.lineMap.IndexOf([int]$c.line)   # search the array
+            if ($pos -ge 0) {
+                $inline += @{
+                    path = $c.path
+                    line = $pos + 1          # GitHub expects 1-based diff line no.
+                    side = 'RIGHT'
+                    body = $c.comment
+                }
+            } else {
+                Write-Verbose "Line $($c.line) not in diff. Skipping comment."
             }
         }
     )
