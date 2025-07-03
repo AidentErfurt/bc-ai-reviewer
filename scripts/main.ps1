@@ -232,6 +232,74 @@ Begin {
         }
     }
 
+    function Invoke-GitHubGraphQL {
+        param([string]$Query,[Hashtable]$Variables)
+        Invoke-GitHub -Method POST -Path '/graphql' -Body @{ query=$Query; variables=$Variables }
+    }
+
+    function Get-PRGraphMeta {
+        param($Owner,$Repo,[int]$PrNumber)
+$query = @"
+query (
+  \$owner:String!,\$repo:String!,\$pr:Int!){
+  repository(owner:\$owner,name:\$repo){
+    pullRequest(number:\$pr){ id headRefOid }
+  }
+}
+"@
+        $result = Invoke-GitHubGraphQL -Query $query -Variables @{owner=$Owner;repo=$Repo;pr=$PrNumber}
+        $pr      = $result.data.repository.pullRequest
+        return $pr
+    }
+
+    function New-DraftReview {
+        param($PullId,$CommitOid,[string]$Body)
+$gql = @"
+mutation (
+  \$pr:ID!,\$sha:GitObjectID!,\$body:String!){
+  createPullRequestReview(input:{
+    pullRequestId:\$pr
+    commitOID:     \$sha
+    body:          \$body
+    event:         COMMENT   # keep PENDING so we can add threads
+  }){ pullRequestReview{ id url } }
+}
+"@
+        (Invoke-GitHubGraphQL -Query $gql -Variables @{pr=$PullId;sha=$CommitOid;body=$Body}).data.createPullRequestReview.pullRequestReview
+    }
+
+    function Add-ReviewThread {
+        param($ReviewId,$CommitOid,$Path,[int]$Line,[string]$Body,[string]$Side='RIGHT')
+$gql = @"
+mutation (
+  \$rid:ID!,\$sha:GitObjectID!,\$path:String!,\$ln:Int!,\$side:DiffSide!,\$body:String!){
+  addPullRequestReviewThread(input:{
+    pullRequestReviewId: \$rid
+    commitOID:           \$sha
+    path:                \$path
+    line:                \$ln
+    side:                \$side
+    body:                \$body
+  }){ thread{ id } }
+}
+"@
+        Invoke-GitHubGraphQL -Query $gql -Variables @{rid=$ReviewId;sha=$CommitOid;path=$Path;ln=$Line;side=$Side;body=$Body} | Out-Null
+    }
+
+    function Submit-ReviewGraph {
+        param($ReviewId,[ValidateSet('COMMENT','APPROVE','REQUEST_CHANGES')]$Event)
+$gql = @"
+mutation (
+  \$rid:ID!,\$ev:PullRequestReviewEvent!){
+  submitPullRequestReview(input:{ pullRequestReviewId:\$rid event:\$ev }){
+    pullRequestReview{ url state }
+  }
+}
+"@
+        Invoke-GitHubGraphQL -Query $gql -Variables @{rid=$ReviewId;ev=$Event} | Out-Null
+    }
+
+
     ############################################################################
     # helper: return every issue linked to the PR (GraphQL)
     ############################################################################
@@ -1030,19 +1098,48 @@ Example of an empty-but-valid result:
         Write-Host "Posting all $($inline.Count) inline comments"
     }
 
-    ########################################################################
-    # 9. Create review
-    ########################################################################
+    # ########################################################################
+    # # 9. Create review
+    # ########################################################################
 
-    try {
-        Submit-Review -comments $inline
-    } catch {
-        Write-Warning "Submitting inline comments failed: $_  - falling back to summary-only"
+    # try {
+    #     Submit-Review -comments $inline
+    # } catch {
+    #     Write-Warning "Submitting inline comments failed: $_  - falling back to summary-only"
+    # }
+
+    # Write-Host "Review complete for PR #$prNumber"
+
+     # region ─────────── 9. Post review via GraphQL  ────────────────────────
+
+    $meta = Get-PRGraphMeta -Owner $owner -Repo $repo -PrNumber $prNumber
+    $pullId    = $meta.id
+    $headSha   = $meta.headRefOid
+
+    # 9.1 create a draft review (summary only for now)
+    $reviewObj = New-DraftReview -PullId $pullId -CommitOid $headSha -Body $review.summary
+    $reviewId  = $reviewObj.id
+    Write-Host "Created draft review $($reviewObj.url)"
+
+    # 9.2 add threads (each inline comment)
+    foreach ($c in $inline) {
+        Add-ReviewThread -ReviewId $reviewId -CommitOid $headSha -Path $c.path -Line $c.line -Body $c.body -Side 'RIGHT'
     }
 
+    # 9.3 finally submit (or leave pending if no inline comments)
+    $event = if ($ApproveReviews) {
+        switch ($review.suggestedAction) {
+            'approve'          { 'APPROVE' }
+            'request_changes'  { 'REQUEST_CHANGES' }
+            default            { 'COMMENT' }
+        }
+    } else { 'COMMENT' }
+
+    Submit-ReviewGraph -ReviewId $reviewId -Event $event
     Write-Host "Review complete for PR #$prNumber"
-    }
 
+    # endregion
+}
 
 End {
     Write-Host 'Invoke-AICodeReview finished.'
