@@ -241,76 +241,56 @@ Begin {
         $files   = @()
         $current = $null
         $newLine = 0
-        $diffPos = 0         # 1-based position inside each hunk
+        $diffPos = 0          # 1-based position INSIDE THE FILE PATCH
 
         foreach ($line in $patch -split "`n") {
 
-            # ── new file diff ───────────────────────────────────────────────
+            # ── new file header ───────────────────────────────────────────────
             if ($line -match '^diff\s--git\s+a\/.+\s+b\/(?<path>.+)$') {
-
-                if ($current -and $current.path -and $current.diffLines.Count) {
-                    $files += $current      # flush previous chunk
-                }
+                if ($current) { $files += $current }          # flush previous file
 
                 $current = [ordered]@{
                     path      = $Matches.path
                     diffLines = @()
-                    mappings  = @{}         # new-file line -> diff position
+                    mappings  = @{}        # new-file line → diff position
                 }
                 $newLine = 0
-                $diffPos = 0 # reset for the new file
+                $diffPos = 0               # reset for the new FILE (not for hunks)
                 continue
             }
 
-            if (-not $current) { continue }  # we are still before the first diff
+            if (-not $current) { continue }  # still before first file diff
 
-            $current.diffLines += $line      # keep full diff text for the prompt
+            # keep full text for the prompt  ➜  already in GitHub’s count
+            $current.diffLines += $line
+            ++$diffPos                            # COUNT **EVERY** LINE WE ADD
 
-            # hunk header  (@@ -12,7 +15,8 @@)
+            # ── hunk header (@@ -a,b +c,d @@) ────────────────────────────────
             if ($line -match '^@@ -\d+(?:,\d+)? \+(?<new>\d+)(?:,\d+)? @@') {
-                $newLine = [int]$Matches.new
-                $diffPos = 0               # reset position counter per hunk
-                continue
+                $newLine = [int]$Matches.new      # reset line-number pointer only
+                continue                          # (counter keeps running!)
             }
 
-            if ($line.Length -eq 0) { continue }
+            if ($line.Length -eq 0) { continue }  # impossible in a diff, but safe
 
             switch ($line[0]) {
-
-                '+' {                       # insertion -> appears in new file
-                    ++$diffPos
-                    $current.mappings[$newLine] = $diffPos
-                    $newLine++
-                }
-
-                ' ' {                       # context   -> still present
-                    ++$diffPos
-                    $current.mappings[$newLine] = $diffPos
-                    $newLine++
-                }
-
-                '-' {                       # deletion  -> not in new file
-                    $diffPos++              # …but it *does* occupy a diff line
-                }
-
-                default { }                 # headers (---, +++, \ No newline…) – ignore
+                '+' { $current.mappings[$newLine] = $diffPos; $newLine++ }
+                ' ' { $current.mappings[$newLine] = $diffPos; $newLine++ }
+                # '-' affects the position counter already – nothing else to do
             }
         }
 
-        # tail-piece
-        if ($current -and $current.path -and $current.diffLines.Count) {
-            $files += $current
-        }
+        if ($current) { $files += $current }      # flush last file
 
-        # emit simple objects for the AI prompt
         foreach ($f in $files) {
             [pscustomobject]@{
                 path    = $f.path
                 diff    = "```diff`n$($f.diffLines -join "`n")`n````"
-                lineMap = $f.mappings       # hashtable: new-file line -> position
+                lineMap = $f.mappings
             }
         }
     }
+
 
     ############################################################################
     # helper: return every issue linked to the PR (GraphQL)
