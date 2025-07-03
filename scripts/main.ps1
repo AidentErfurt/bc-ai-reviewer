@@ -233,80 +233,6 @@ Begin {
     }
 
     ############################################################################
-    # Helper: Parse a unified diff into file objects for review
-    ############################################################################
-
-    function Get-PRFilesViaApi {
-        param($Owner, $Repo, [int]$PrNumber, [int]$PageSize = 100)
-        $all  = @()
-        $page = 1
-
-        do {
-            $uri  = "/repos/$Owner/$Repo/pulls/$PrNumber/files?per_page=$PageSize&page=$page"
-            $resp = Invoke-GitHub -Method GET -Path $uri
-            $all += $resp
-            $page++
-        } until ($resp.Count -lt $PageSize)     # GitHub pages at ≤ PageSize :contentReference[oaicite:0]{index=0}
-
-        return $all | Where-Object { $_.patch }  # skip binary/oversized files
-    }
-
-    function Build-LineMap {
-        <#
-            INPUT  : the `.patch` string for ONE file
-            OUTPUT : [pscustomobject] @{
-                        Map       = @{ <new-file line> = <1-based diff position> }
-                        DiffLines = <string[]>        # every line of the diff as read
-                    }
-        #>
-        param([string]$Patch)
-
-        $map      = @{}
-        $diffPos  = 0            # count every *physical* line in the unified diff
-        $newLine  = 0            # 1-based line number in the *new* file
-        $lines    = @()
-
-        foreach ($line in $Patch -split "`n") {
-            $lines += $line
-            $diffPos++
-
-            switch -Regex ($line) {
-
-                # ── hunk header ─────────────────────────────────────────────────────
-                '^@@ -\d+(?:,\d+)? \+(?<n>\d+)(?:,(?<cnt>\d+))?' {
-                    $newLine = [int]$Matches.n
-                    continue
-                }
-
-                # ── context OR addition (incl. *blank* “+” lines) ──────────────────
-                '^[+ ]' {
-                    # store the mapping *even if the line is just "+"*
-                    $map[$newLine] = $diffPos
-                    $newLine++
-                    continue
-                }
-
-                 #  “\ No newline at end of file”  → ignore, do not advance $newLine
-                '^[\\] No newline at end of file' { continue }
-
-                default { continue }
-            }
-        }
-
-        # ── edge-case: brand-new but empty file ────────────────────────────────────
-        if ($map.Count -eq 0 -and $Patch -match '^\+\+\+ ') {
-            # GitHub shows one phantom line so reviewers have something to click on
-            $map[1]   = $lines.Count           # last line is the hunk header
-            $lines   += '+'                    # fabricate one display line
-        }
-
-        [pscustomobject]@{
-            Map       = $map
-            DiffLines = $lines
-        }
-    }
-
-    ############################################################################
     # helper: return every issue linked to the PR (GraphQL)
     ############################################################################
 
@@ -545,12 +471,87 @@ closingIssuesReferences(first: 50) {
     }
 
     ############################################################################
+    # Helper: Parse a unified diff into file objects for review  (TS approach)
+    ############################################################################
+    function Parse-Patch {
+        param([string]$Patch)
+
+        $files   = @()
+        $current = $null
+        $newLine = 0
+
+        foreach ($line in $Patch -split "`n") {
+
+            # ── diff header → start of new file ────────────────────────────────
+            if ($line -match '^diff\s--git\s+a\/.+\s+b\/(?<path>.+)$') {
+
+                # push previous chunk if it had diff lines
+                if ($current -and $current.path -and $current.diffLines.Count) {
+                    $files += $current
+                }
+
+                # start new chunk
+                $current = [ordered]@{
+                    path      = $Matches.path
+                    diffLines = @()
+                    lineMap   = @{}
+                }
+                $newLine = 0
+                continue
+            }
+
+            if (-not $current) { continue }   # skip until first file header
+
+            # collect diff text verbatim
+            $current.diffLines += $line
+
+            # ── hunk header @@ -m,n +p,q @@ → capture *p*
+            if ($line -match '^@@ -\d+(?:,\d+)? \+(?<p>\d+)(?:,(?<q>\d+))? @@') {
+                $newLine = [int]$Matches.p
+                continue
+            }
+
+            if ($line.Length -eq 0) { continue }
+
+            switch ($line[0]) {
+                '+' {                    # insertion
+                    $current.lineMap[$newLine] = $current.diffLines.Count
+                    $newLine++
+                }
+                ' ' {                    # context
+                    $current.lineMap[$newLine] = $current.diffLines.Count
+                    $newLine++
+                }
+                '-' { }                  # deletion – doesn’t consume new-file line
+            }
+        }
+
+        # tail-piece
+        if ($current -and $current.path -and $current.diffLines.Count) {
+            $files += $current
+        }
+
+        # emit PSCustomObjects that the rest of your pipeline already expects
+        foreach ($f in $files) {
+            [pscustomobject]@{
+                path      = $f.path
+                diff      = "```diff`n$($f.diffLines -join "`n")`n````"
+                lineMap   = $f.lineMap
+                diffLines = $f.diffLines
+            }
+        }
+    }
+
+    ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode…
     ############################################################################
 
     Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
     Write-Host "Repository: $env:GITHUB_REPOSITORY  Provider: $Provider"
+
+    if ($ApiKey)      { Write-Host "::add-mask::$ApiKey" }
+    if ($AzureApiKey) { Write-Host "::add-mask::$AzureApiKey" }
 
     # Runtime-guard in case empty strings were passed
     if ($Provider -in @('openai','openrouter') -and [string]::IsNullOrWhiteSpace($ApiKey)) {
@@ -604,35 +605,27 @@ Process {
     }
 
     ############################################################################
-    # 3. Fetch & parse diff
+    # 3. Fetch & parse diff   (incremental)
     ############################################################################
+    # decide which commits to diff
+    $baseRef = if ($lastCommit) { $lastCommit } else { $pr.base.sha }
+    $headRef = $pr.head.sha
 
-    # keep the rest of the pipeline
-    $rawFiles  = Get-PRFilesViaApi -Owner $owner -Repo $repo -PrNumber $prNumber
-    $files = foreach ($item in $rawFiles) {
-        $pm    = Build-LineMap -Patch $item.patch
-        [pscustomobject]@{
-            path      = $item.filename
-            diff      = "```diff`n$item.patch`n````"
-            lineMap   = $pm.Map
-            diffLines = $pm.DiffLines
-        }
+    # run git diff with <DiffContextLines> lines of context
+    Write-Host "Generating diff with $DiffContextLines lines of context..."
+    $patch = (& git diff --unified=$DiffContextLines --find-renames --diff-filter=AMCR --no-color $baseRef $headRef | Out-String)
+
+    # Guard-rail: abort if the diff is ridiculously large
+    $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
+    $maxBytes = 500KB      # tweak here if needed
+    if ($byteSize -gt $maxBytes) {
+        throw ("The generated diff is {0:N0} bytes (> {1:N0}). " +
+            "Consider tightening INCLUDE_PATTERNS / EXCLUDE_PATTERNS " +
+            "or splitting the PR." -f $byteSize, $maxBytes)
     }
 
-    Write-Host '::group::Raw $files'
-    foreach ($f in $files) {
-        $kind  = if ($f -is [pscustomobject]) { 'PSCustomObject' } else { $f.GetType().Name }
-        $hasP  = $f -is [pscustomobject] -and $f.psobject.Properties['path']
-        $text  = if ($hasP) { $f.path } else { '<no path>' }
-        Write-Verbose ("{0,-15}  hasPath={1}  value={2}" -f $kind,$hasP,$text)
-    }
-    Write-Host '::endgroup::'
-
-    $files = @($files)               # wrap null / scalar into an array
-    if (-not $files) {               # still empty? -> nothing to review
-        Write-Host 'Patch is empty. Skipping review.'
-        return
-    }
+    # feed the *same* patch the model will see into Parse-Patch
+    $files = Parse-Patch $patch
 
     Write-Host '::group::Files in patch'
     $files.path | ForEach-Object { Write-Host $_ }
@@ -994,6 +987,7 @@ Example of an empty-but-valid result:
     # 8. Build inline comment objects
     ########################################################################
 
+    $review.comments = $review.comments[0..($MaxComments-1)]
     $inline = @(
         foreach ($c in $review.comments) {
 
@@ -1015,20 +1009,6 @@ Example of an empty-but-valid result:
                 }
                 continue
             }
-
-            # ----------------------------------------------------------------
-            # Case B –– maybe it actually sent a raw diff position?
-            # ----------------------------------------------------------------
-            if ($newLine -ge 1 -and $newLine -le $file.diffLines.Count) {
-                [pscustomobject]@{
-                    path     = $c.path
-                    line      = $newLine          # 1-based new-file line
-                    side      = 'RIGHT'           # always the “after” side
-                    body     = $c.comment
-                }
-                continue
-            }
-
             Write-Verbose "Model requested unknown line $($c.line) in $($c.path) -> skipped."
         }
     )
