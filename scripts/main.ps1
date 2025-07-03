@@ -155,6 +155,8 @@ function Invoke-AICodeReview {
 
 Begin {
 
+    Set-StrictMode -Version Latest
+
     ############################################################################
     # Helpers
     ############################################################################
@@ -231,81 +233,6 @@ Begin {
             throw
         }
     }
-
-    function Invoke-GitHubGraphQL {
-        param([string]$Query,[Hashtable]$Variables)
-
-        $resp = Invoke-GitHub -Method POST -Path '/graphql' `
-                -Body @{ query=$Query; variables=$Variables }
-
-        if ($resp.PSObject.Properties['errors']) {
-            $msg = ($resp.errors | ConvertTo-Json -Depth 5)
-            throw "GitHub GraphQL error:`n$msg"
-        }
-        return $resp
-    }
-
-    function Get-PRGraphMeta {
-        param($Owner,$Repo,[int]$PrNumber)
-$query = @"
-query (
-  `$owner:String!,`$repo:String!,`$pr:Int!){
-  repository(owner:`$owner,name:`$repo){
-    pullRequest(number:`$pr){ id headRefOid }
-  }
-}
-"@
-        $result = Invoke-GitHubGraphQL -Query $query -Variables @{owner=$Owner;repo=$Repo;pr=$PrNumber}
-        $pr      = $result.data.repository.pullRequest
-        return $pr
-    }
-
-    function New-DraftReview {
-        param($PullId,$CommitOid,[string]$Body)
-$gql = @"
-mutation (
-  `$pr:ID!,`$sha:GitObjectID!,`$body:String!){
-  createPullRequestReview(input:{
-    pullRequestId:`$pr
-    commitOID:     `$sha
-    body:          `$body
-  }){ pullRequestReview{ id url } }
-}
-"@
-        (Invoke-GitHubGraphQL -Query $gql -Variables @{pr=$PullId;sha=$CommitOid;body=$Body}).data.createPullRequestReview.pullRequestReview
-    }
-
-    function Add-ReviewThread {
-        param($ReviewId,$CommitOid,$Path,[Nullable[int]]$Line = $null,[string]$Body,[string]$Side='RIGHT')
-$gql = @"
-mutation (
-  `$rid:ID!,`$sha:GitObjectID!,`$path:String!,`$ln:Int!,`$side:DiffSide!,`$body:String!){
-  addPullRequestReviewThread(input:{
-    pullRequestReviewId: `$rid
-    commitOID:           `$sha
-    path:                `$path
-    line:                `$ln
-    side:                `$side
-    body:                `$body
-  }){ thread{ id } }
-}
-"@
-        Invoke-GitHubGraphQL -Query $gql -Variables @{rid=$ReviewId;sha=$CommitOid;path=$Path;ln=$Line;side=$Side;body=$Body} | Out-Null
-    }
-
-    function Submit-ReviewGraph {
-        param($ReviewId,[ValidateSet('COMMENT','APPROVE','REQUEST_CHANGES')]$Event)
-$gql = @"
-mutation (
-  `$rid:ID!,`$ev:PullRequestReviewEvent!){
-  submitPullRequestReview(input:{ pullRequestReviewId:`$rid event:`$ev }){
-    pullRequestReview{ url state }
-  }
-}
-"@
-        Invoke-GitHubGraphQL -Query $gql -Variables @{rid=$ReviewId;ev=$Event} | Out-Null
-    }
-
 
     ############################################################################
     # helper: return every issue linked to the PR (GraphQL)
@@ -484,22 +411,6 @@ closingIssuesReferences(first: 50) {
         return $null
     }
     
-    ############################################################################
-    # Helper: Map inline comments & submit review
-    ############################################################################
-    
-    function Submit-Review { param($comments)
-
-        # ensure comments is always an array
-        $comments = @($comments)
-
-        Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body @{
-            body     = $review.summary
-            comments = $comments
-            event    = if ($ApproveReviews) { $review.suggestedAction.ToUpper() } else { 'COMMENT' }
-        }
-    }
-
     #########################################################
     # Helper: to create the *summary* review only
     #########################################################
@@ -609,7 +520,7 @@ closingIssuesReferences(first: 50) {
         $files | ForEach-Object {
             [pscustomobject]@{
                 path     = $_.path
-                diff     = "```diff`n$($_.diff -join "`n")`n````"
+                diff = '```diff' + "`n" + ($_.diff -join "`n") + "`n````"
                 leftMap  = $_.leftMap
                 rightMap = $_.rightMap
                 diffLines = $_.diff
@@ -617,12 +528,29 @@ closingIssuesReferences(first: 50) {
         }
     }
 
+    #########################################################
+    # Helper to add a single inline comment to the review
+    #########################################################
+    
+    function Add-ReviewComment {
+    param(
+        [string]$ReviewId,
+        [hashtable]$Comment
+    )
+        # Use the Pull Request Comments endpoint for inline comments (GitHub REST)
+        Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/comments" -Body @{
+            body      = $Comment.body
+            commit_id = $pr.head.sha
+            path      = $Comment.path
+            side      = $Comment.side
+            line      = $Comment.line
+        }
+    }
 
     ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode…
     ############################################################################
 
-    Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
     Write-Host "Repository: $env:GITHUB_REPOSITORY  Provider: $Provider"
 
@@ -689,7 +617,7 @@ Process {
 
     # run git diff with <DiffContextLines> lines of context
     Write-Host "Generating diff with $DiffContextLines lines of context..."
-    $patch = (& git diff --unified=$DiffContextLines --find-renames --diff-filter=AMCR --no-color $baseRef $headRef | Out-String)
+    $patch = (& git diff --unified=$DiffContextLines --find-renames --diff-filter=ACDMR --no-color $baseRef $headRef | Out-String)
 
     # Guard-rail: abort if the diff is ridiculously large
     $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
@@ -1090,7 +1018,7 @@ Example of an empty-but-valid result:
         [pscustomobject]@{
             path = $file.path
             line = $ln
-            side = $side
+            side = $side # 'RIGHT' or 'LEFT'
             body = $c.comment
         }
     }
@@ -1110,32 +1038,19 @@ Example of an empty-but-valid result:
     # # 9. Create review
     # ########################################################################
 
-    # Write-Host "Review complete for PR #$prNumber"
+    try {
+        # 1. create the review (summary only)
+        $reviewResponse = New-Review
+        $reviewId = $reviewResponse.id
 
-    $meta = Get-PRGraphMeta -Owner $owner -Repo $repo -PrNumber $prNumber
-    $pullId    = $meta.id
-    $headSha   = $meta.headRefOid
-
-    # 9.1 create a draft review (summary only for now)
-    $reviewObj = New-DraftReview -PullId $pullId -CommitOid $headSha -Body $review.summary
-    $reviewId  = $reviewObj.id
-    Write-Host "Created draft review $($reviewObj.url)"
-
-    # 9.2 add threads (each inline comment)
-    foreach ($c in $inline) {
-        Add-ReviewThread -ReviewId $reviewId -CommitOid $headSha -Path $c.path -Line $c.line -Body $c.body -Side $c.side
+        # 2. add inline comments, if any
+        foreach ($c in $inline) {
+            Add-ReviewComment -ReviewId $reviewId -Comment $c
+        }
+    } catch {
+        Write-Warning "Submitting inline comments failed: $_  - falling back to summary-only"
     }
 
-    # 9.3 finally submit (or leave pending if no inline comments)
-    $event = if ($ApproveReviews) {
-        switch ($review.suggestedAction) {
-            'approve'          { 'APPROVE' }
-            'request_changes'  { 'REQUEST_CHANGES' }
-            default            { 'COMMENT' }
-        }
-    } else { 'COMMENT' }
-
-    Submit-ReviewGraph -ReviewId $reviewId -Event $event
     Write-Host "Review complete for PR #$prNumber"
 
     # endregion
