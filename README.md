@@ -15,31 +15,31 @@ The action fetches the PR diff, optional context files, and any referenced issue
 * Hard cap for inline-comment noise (`MAX_COMMENTS`).
 * Fully configurable file-glob **include / exclude** filters.
 
-## 🔧 Inputs
+### 🔧 Inputs
 
-| Name                      | Required         | Default                      | Description                                                                               |         |              |
-| ------------------------- | ---------------- | ---------------------------- | ----------------------------------------------------------------------------------------- | ------- | ------------ |
-| `GITHUB_TOKEN`            | **yes**          | —                            | GitHub token with repo scope                                                              |         |              |
-| `AI_PROVIDER`             | no               | `azure`                      | `openai`                                                                                  | `azure` | `openrouter` |
-| `AI_MODEL`                | no               | `gpt-4o-mini`                | Model or deployment name                                                                  |         |              |
-| `AI_API_KEY`              | no (conditional) | —                            | OpenAI API key (required if provider = `openai` or `openrouter`)                          |         |              |
-| `AZURE_ENDPOINT`          | no (conditional) | —                            | Azure OpenAI endpoint (required if provider = `azure`)                                    |         |              |
-| `AZURE_API_KEY`           | no (conditional) | —                            | Azure OpenAI API key (required if provider = `azure`)                                     |         |              |
-| `AZURE_API_VERSION`       | no               | `2024-05-01-preview`         | Azure OpenAI API version                                                                  |         |              |
-| `MAX_COMMENTS`            | no               | `10`                         | Hard cap on inline comments (0 = unlimited)                                               |         |              |
-| `BASE_PROMPT_EXTRA`       | no               | `""`                         | Free-form text injected into the system prompt (optional)                                 |         |              |
-| `PROJECT_CONTEXT`         | no               | `""`                         | Architecture/guidelines context for the AI                                                |         |              |
-| `CONTEXT_FILES`           | no               | `""`                         | Comma-separated globs whose contents are always fetched as context                        |         |              |
-| `INCLUDE_PATTERNS`        | no               | `**/*.al,**/*.xlf,**/*.json` | Comma-separated globs of files to include in the review                                   |         |              |
-| `EXCLUDE_PATTERNS`        | no               | `""`                         | Comma-separated globs of files to exclude from the review                                 |         |              |
-| `ISSUE_COUNT`             | no               | `0`                          | Max linked issues to fetch (0 = all)                                                      |         |              |
-| `FETCH_CLOSED_ISSUES`     | no               | `true`                       | Include closed issues when gathering issue context                                        |         |              |
-| `DIFF_CONTEXT_LINES`      | no               | `5`                          | Number of context lines passed to `git diff --unified`                                    |         |              |
-| `AUTO_DETECT_APPS`        | no               | `true`                       | Enable automatic discovery of `app.json` files to improve AI context                                            |         |              |
-| `INCLUDE_APP_PERMISSIONS` | no               | `true`                       | If auto-detecting apps, include `*.PermissionSet.al` and `*.Entitlement.al` from each app |         |              |
-| `INCLUDE_APP_MARKDOWN`    | no               | `true`                       | If auto-detecting apps, include `*.md` files from each app                                |         |              |
-| `GUIDELINE_RULES_PATH`    | no               | `""`                         | Path to a JSON or PSD1 file defining custom AL-Guideline rules                            |         |              |
-| `DISABLE_GUIDELINEDOCS`   | no               | `false`                      | Skip fetching the official Microsoft AL-Guidelines documentation                          |         |              |
+| Name                      | Required?                                          | Default                      | Description                                                                                   |
+| ------------------------- | -------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
+| `GITHUB_TOKEN`            | **yes**                                            | –                            | Token with `contents:read`, `pull-requests:write`, `issues:read`.                         |
+| `AI_PROVIDER`             | no                                                 | `azure`                      | Which backend to call: `openai` \| `azure` \| `openrouter`.                                   |
+| `AI_MODEL`                | no                                                 | `gpt-4o-mini`                | Model name (OpenAI/OpenRouter) **or** deployment name (Azure).                                |
+| `AI_API_KEY`              | only when `AI_PROVIDER` = `openai` \| `openrouter` | –                            | Public OpenAI key or OpenRouter key.                                                          |
+| `AZURE_ENDPOINT`          | only when `AI_PROVIDER` = `azure`                  | –                            | Your Azure OpenAI endpoint URL.                                                               |
+| `AZURE_API_KEY`           | only when `AI_PROVIDER` = `azure`                  | –                            | Azure OpenAI key.                                                                             |
+| `AZURE_API_VERSION`       | no                                                 | `2024-05-01-preview`         | Azure REST API version.                                                                       |
+| `MAX_COMMENTS`            | no                                                 | `10`                         | Hard cap for inline comments (`0` = unlimited).                                               |
+| `BASE_PROMPT_EXTRA`       | no                                                 | `""`                         | Extra text injected into the **system prompt** *before* the fixed JSON-response instructions. |
+| `PROJECT_CONTEXT`         | no                                                 | `""`                         | Free-form architectural or guideline notes shown to the model.                                |
+| `CONTEXT_FILES`           | no                                                 | `""`                         | Comma-separated globs always provided as context (e.g. `README.md,docs/*.md`).                |
+| `INCLUDE_PATTERNS`        | no                                                 | `**/*.al,**/*.xlf,**/*.json` | Files to consider in the review.                                                              |
+| `EXCLUDE_PATTERNS`        | no                                                 | `""`                         | Globs to ignore.                                                                              |
+| `ISSUE_COUNT`             | no                                                 | `0`                          | Max linked issues to fetch (`0` = all).                                                       |
+| `FETCH_CLOSED_ISSUES`     | no                                                 | `true`                       | Include closed issues in the context.                                                         |
+| `DIFF_CONTEXT_LINES`      | no                                                 | `5`                          | Number of surrounding lines for the `git diff --unified` call.                                |
+| `AUTO_DETECT_APPS`        | no                                                 | `true`                       | Auto-discover `app.json` roots and add relevant files as context.                             |
+| `INCLUDE_APP_PERMISSIONS` | no                                                 | `true`                       | If auto-detect is on, include `*.PermissionSet.al` + `*.Entitlement.al` from each app.        |
+| `INCLUDE_APP_MARKDOWN`    | no                                                 | `true`                       | If auto-detect is on, include `*.md` files from each app.                                     |
+| `GUIDELINE_RULES_PATH`    | no                                                 | `""`                         | Path to a JSON or PSD1 file defining **custom AL-Guideline rules**.                           |
+| `DISABLE_GUIDELINEDOCS`   | no                                                 | `false`                      | Skip downloading the official Microsoft *AL Guidelines* docs.                                 |
 
 ## 🛠 How it works
 
