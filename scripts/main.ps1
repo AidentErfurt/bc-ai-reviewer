@@ -532,26 +532,6 @@ closingIssuesReferences(first: 50) {
         }
     }
 
-    #########################################################
-    # Helper to add a single inline comment to the review
-    #########################################################
-    
-    function Add-ReviewComment {
-    param(
-        [string]   $ReviewId,   # id returned by New-Review
-        [hashtable]$Comment     # @{ path; line; side; body }
-    )
-    Invoke-GitHub -Method POST `
-        -Path "/repos/$owner/$repo/pulls/$prNumber/reviews/$ReviewId/comments" `
-        -Body @{
-            body      = $Comment.body
-            commit_id = $pr.head.sha         # head-commit SHA
-            path      = $Comment.path
-            side      = $Comment.side        # 'RIGHT' or 'LEFT'
-            line      = $Comment.line        # file-relative line no on that side
-        }
-    }
-
     ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode…
     ############################################################################
@@ -1007,33 +987,27 @@ Example of an empty-but-valid result:
         $file = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
         if (-not $file) { continue }
 
-        # --- validate the line number ------------------------------------------------
+        # -------- validate `line` ----------
         [int]$ln = 0
-        if (-not [int]::TryParse($c.line, [ref]$ln) -or $ln -le 0) {
-            Write-Verbose "Skipping invalid line number '$($c.line)' in $($c.path)"
-            continue
-        }
-        # -----------------------------------------------------------------------------
+        if (-not [int]::TryParse($c.line, [ref]$ln) -or $ln -le 0) { continue }
 
-        $side = 'RIGHT'   # default
+        # -------- decide side & locate diff index ----------
+        $side      = $file.rightMap.ContainsKey($ln) ? 'RIGHT' : ($file.leftMap.ContainsKey($ln) ? 'LEFT' : $null)
+        if (-not $side) { continue }
 
-        # Did the model point at a *deleted* line?
-        if ($file.rightMap.ContainsKey($ln)) {
-            $side = 'RIGHT'
-        } elseif ($file.leftMap.ContainsKey($ln)) {
-            $side = 'LEFT'
-        } else {
-            Write-Verbose "Skipping unknown line $ln in $($file.path)"
-            continue
-        }
+        $diffIndex = ($side -eq 'RIGHT') ? $file.rightMap[$ln] : $file.leftMap[$ln]
 
-        # return a **hashtable** – not a PSCustomObject – so Add-ReviewComment receives
-        # a [hashtable] and no type-conversion error is thrown
+        # -------- compute *position* ----------
+        $idx = $diffIndex
+        while ($idx -ge 0 -and (-not $file.diffLines[$idx].StartsWith('@@'))) { $idx-- }
+        $position = ($idx -ge 0) ? ($diffIndex - $idx) : $null    # 1-based relative to hunk start
+
         @{
-            path = $file.path
-            line = $ln
-            side = $side   # 'RIGHT' or 'LEFT'
-            body = $c.comment
+            path     = $file.path
+            line     = $ln
+            side     = $side         # new style
+            position = $position     # legacy style – fine if $null
+            body     = $c.comment
         }
     }
 
