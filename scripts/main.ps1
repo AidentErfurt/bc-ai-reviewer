@@ -235,65 +235,76 @@ Begin {
     ############################################################################
     # Helper: Parse a unified diff into file objects for review
     ############################################################################
-    function Parse-Patch {
-        param([string]$patch)
 
-        $files   = @()
-        $current = $null
-        $newLine = 0
-        $diffPos = 0          # 1-based position INSIDE THE FILE PATCH
+    function Get-PRFilesViaApi {
+        param($Owner, $Repo, [int]$PrNumber, [int]$PageSize = 100)
+        $all  = @()
+        $page = 1
 
-        foreach ($line in $patch -split "`n") {
+        do {
+            $uri  = "/repos/$Owner/$Repo/pulls/$PrNumber/files?per_page=$PageSize&page=$page"
+            $resp = Invoke-GitHub -Method GET -Path $uri
+            $all += $resp
+            $page++
+        } until ($resp.Count -lt $PageSize)     # GitHub pages at ≤ PageSize :contentReference[oaicite:0]{index=0}
 
-            # ── new file header ───────────────────────────────────────────────
-            if ($line -match '^diff\s--git\s+a\/.+\s+b\/(?<path>.+)$') {
-                if ($current) { $files += $current }          # flush previous file
-
-                $current = [ordered]@{
-                    path      = $Matches.path
-                    diffLines = @()
-                    mappings  = @{}        # new-file line → diff position
-                }
-                $newLine = 0
-                $diffPos = 0               # reset for the new FILE (not for hunks)
-                 ++$diffPos                # count this header line!
-                continue
-            }
-
-            if (-not $current) { continue }  # still before first file diff
-
-            # keep full text for the prompt  ->  already in GitHub’s count
-            $current.diffLines += $line
-
-            # ── hunk header (@@ -a,b +c,d @@) ────────────────────────────────
-            if ($line -match '^@@ -\d+(?:,\d+)? \+(?<new>\d+)(?:,\d+)? @@') {
-                $newLine = [int]$Matches.new      # reset line-number pointer only
-                ++$diffPos                        # count the hunk header too!
-                continue                          # (counter keeps running!)
-            }
-
-            if ($line.Length -eq 0) { continue }  # impossible in a diff, but safe
-
-            switch ($line[0]) {
-                '+' { $current.mappings[$newLine] = $diffPos; $newLine++ }
-                ' ' { $current.mappings[$newLine] = $diffPos; $newLine++ }
-                # '-' affects the position counter already – nothing else to do
-            }
-            ++$diffPos
-        }
-
-        if ($current) { $files += $current }      # flush last file
-
-        foreach ($f in $files) {
-            [pscustomobject]@{
-                path    = $f.path
-                diffLines = $f.diffLines
-                diff    = "```diff`n$($f.diffLines -join "`n")`n````"
-                lineMap = $f.mappings
-            }
-        }
+        return $all | Where-Object { $_.patch }  # skip binary/oversized files
     }
 
+    function Build-LineMap {
+        <#
+            INPUT  : the `.patch` string for ONE file
+            OUTPUT : [pscustomobject] @{
+                        Map       = @{ <new-file line> = <1-based diff position> }
+                        DiffLines = <string[]>        # every line of the diff as read
+                    }
+        #>
+        param([string]$Patch)
+
+        $map      = @{}
+        $diffPos  = 0            # count every *physical* line in the unified diff
+        $newLine  = 0            # 1-based line number in the *new* file
+        $lines    = @()
+
+        foreach ($line in $Patch -split "`n") {
+            $lines += $line
+            $diffPos++
+
+            switch -Regex ($line) {
+
+                # ── hunk header ─────────────────────────────────────────────────────
+                '^@@ -\d+(?:,\d+)? \+(?<n>\d+)' {
+                    $newLine = [int]$Matches.n
+                    continue
+                }
+
+                # ── context OR addition (incl. *blank* “+” lines) ──────────────────
+                '^[+ ]' {
+                    # store the mapping *even if the line is just "+"*
+                    $map[$newLine] = $diffPos
+                    $newLine++
+                    continue
+                }
+
+                 #  “\ No newline at end of file”  → ignore, do not advance $newLine
+                '^[\\] No newline at end of file' { continue }
+
+                default { continue }
+            }
+        }
+
+        # ── edge-case: brand-new but empty file ────────────────────────────────────
+        if ($map.Count -eq 0 -and $Patch -match '^\+\+\+ ') {
+            # GitHub shows one phantom line so reviewers have something to click on
+            $map[1]   = $lines.Count           # last line is the hunk header
+            $lines   += '+'                    # fabricate one display line
+        }
+
+        [pscustomobject]@{
+            Map       = $map
+            DiffLines = $lines
+        }
+    }
 
     ############################################################################
     # helper: return every issue linked to the PR (GraphQL)
@@ -564,38 +575,18 @@ Process {
     ############################################################################
     # 3. Fetch & parse diff
     ############################################################################
-    # decide which commits to diff
-    $baseRef = if ($lastCommit) { $lastCommit } else { $pr.base.sha }
-    $headRef = $pr.head.sha
-
-    # run git diff with x lines of context, rename detection and no colour codes
-    if ($DiffContextLines -lt 0 -or $DiffContextLines -gt 100) {
-        throw "DIFF_CONTEXT_LINES must be between 0 and 100 (gh api limits)."
-    }
-    Write-Host "Generating diff with $DiffContextLines lines of context..."
-    $patch = (& git diff --unified=$DiffContextLines --find-renames --no-color $baseRef $headRef | Out-String)
-    Write-Host '::group::Git diff (with line numbers)'
-
-    $ln = 0
-    $patch -split "`n" | ForEach-Object {
-        # "{0,6}" = right-align 6-wide so the numbers line up
-        "{0,6}: {1}" -f (++$ln), $_
-    } | Write-Host
-
-    Write-Host '::endgroup::'
-
-    # Guardrail: abort if the diff is ridiculously large
-    $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
-    $maxBytes = 500KB      # tweak here if needed
-
-    if ($byteSize -gt $maxBytes) {
-        throw ("The generated diff is {0:N0} bytes (> {1:N0}). " +
-            "Consider tightening INCLUDE_PATTERNS / EXCLUDE_PATTERNS " +
-            "or splitting the PR." -f $byteSize, $maxBytes)
-    }
 
     # keep the rest of the pipeline
-    $files   = Parse-Patch $patch
+    $rawFiles  = Get-PRFilesViaApi -Owner $owner -Repo $repo -PrNumber $prNumber
+    $files = foreach ($item in $rawFiles) {
+        $pm    = Build-LineMap -Patch $item.patch
+        [pscustomobject]@{
+            path      = $item.filename
+            diff      = "```diff`n$item.patch`n````"
+            lineMap   = $pm.Map
+            diffLines = $pm.DiffLines
+        }
+    }
 
     Write-Host '::group::Raw $files'
     foreach ($f in $files) {
@@ -789,27 +780,28 @@ Process {
 
     if (-not $DisableGuidelineDocs) {
 
-        # convert git diff to al code
-        $norm = Convert-PatchToCode -Patch $patch
-        Write-Host '::group::Git diff (normalized)'
-        Write-Host $norm.Text
-        Write-Host '::endgroup::'
-        $triggers = Get-TriggeredGuidelines -Patch $norm.Text
+        foreach ($f in $files) {
+            $norm = Convert-PatchToCode -Patch ( $f.diffLines -join "`n" )
+            Write-Host '::group::Git diff (normalized)'
+            Write-Host $norm.Text
+            Write-Host '::endgroup::'
+            $triggers = Get-TriggeredGuidelines -Patch $norm.Text
 
-        foreach ($hit in $triggers) {
-            # use the mapping to translate back to the unified-diff line no
-            $diffLine = $norm.Map[$hit.Line]
-            Write-Debug ("[DEBUG] {0,-30}  L{1,-5} ⇢  '{2}'" -f `
-                        $hit.Rule, $diffLine, $hit.Snippet)
+            foreach ($hit in $triggers) {
+                # use the mapping to translate back to the unified-diff line no
+                $diffLine = $norm.Map[$hit.Line]
+                Write-Debug ("[DEBUG] {0,-30}  L{1,-5} ⇢  '{2}'" -f `
+                            $hit.Rule, $diffLine, $hit.Snippet)
 
-            $meta = $DefaultGuidelineRules[$hit.Rule]
-            if (-not $meta) { continue }
+                $meta = $DefaultGuidelineRules[$hit.Rule]
+                if (-not $meta) { continue }
 
-            $doc = Get-GuidelineDoc -RuleName $hit.Rule -Folder $meta.folder
-            if ($doc) {
-                $ctxFiles += [pscustomobject]@{
-                    path    = "ALGuidelines/$($hit.Rule).md"
-                    content = $doc
+                $doc = Get-GuidelineDoc -RuleName $hit.Rule -Folder $meta.folder
+                if ($doc) {
+                    $ctxFiles += [pscustomobject]@{
+                        path    = "ALGuidelines/$($hit.Rule).md"
+                        content = $doc
+                    }
                 }
             }
         }
@@ -983,6 +975,20 @@ Example of an empty-but-valid result:
 
             # $file.lineMap   = [ordered]@{ newFileLine => diffPosition0Based }
             $pos = $file.lineMap[[int]$c.line]  # hashtable lookup, NOT IndexOf, returns the 0-based diff position
+
+            if (-not $file.lineMap.ContainsKey([int]$c.line)) {
+                # If Model actually sent a raw diff position, accept it
+                if ([int]$c.line -ge 1 -and [int]$c.line -le $file.diffLines.Count) {
+                    $pos = [int]$c.line
+                }
+                else {
+                    Write-Verbose "Model requested unknown line $($c.line) in $($c.path) -> skipped."
+                    continue
+                }
+            }
+            else {
+                $pos = $file.lineMap[[int]$c.line]
+            }
 
             # fallback: model gave a diff-line position instead of new-file line
             if ($null -eq $pos -and
