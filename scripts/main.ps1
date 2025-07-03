@@ -518,28 +518,28 @@ closingIssuesReferences(first: 50) {
     # Helper to add a single inline comment to the review
     #########################################################
     
-    function Add-ReviewComment {
-    param(
-        [string]$ReviewId,
-        [hashtable]$Comment
-    )
-        # # Use the Pull Request Comments endpoint for inline comments (GitHub REST)
-        # Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/comments" -Body @{
-        #     body      = $Comment.body
-        #     commit_id = $pr.head.sha
-        #     path      = $Comment.path
-        #     side      = $Comment.side
-        #     line      = $Comment.line
-        # }
+    # function Add-ReviewComment {
+    # param(
+    #     [string]$ReviewId,
+    #     [hashtable]$Comment
+    # )
+    #     # # Use the Pull Request Comments endpoint for inline comments (GitHub REST)
+    #     # Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/comments" -Body @{
+    #     #     body      = $Comment.body
+    #     #     commit_id = $pr.head.sha
+    #     #     path      = $Comment.path
+    #     #     side      = $Comment.side
+    #     #     line      = $Comment.line
+    #     # }
 
-        # Use Review Comments endpoint
-        Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews/$ReviewId/comments" -Body @{
-            body = $Comment.body
-            path = $Comment.path
-            side = $Comment.side        # 'RIGHT' or 'LEFT'
-            line = $Comment.line        # diff-relative line number
-        }
-    }
+    #     # Use Review Comments endpoint
+    #     Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews/$ReviewId/comments" -Body @{
+    #         body = $Comment.body
+    #         path = $Comment.path
+    #         side = $Comment.side        # 'RIGHT' or 'LEFT'
+    #         line = $Comment.line        # diff-relative line number
+    #     }
+    # }
 
     ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode…
@@ -1037,14 +1037,15 @@ Example of an empty-but-valid result:
     ########################################################################
 
     try {
-        # 1. create the review (summary only)
-        $reviewResponse = New-Review
-        $reviewId = $reviewResponse.id
+        # # 1. create the review (summary only)
+        # $reviewResponse = New-Review
+        # $reviewId = $reviewResponse.id
 
-        # 2. add inline comments, if any
-        foreach ($c in $inline) {
-            Add-ReviewComment -ReviewId $reviewId -Comment $c
-        }
+        # # 2. add inline comments, if any
+        # foreach ($c in $inline) {
+        #     Add-ReviewComment -ReviewId $reviewId -Comment $c
+        # }
+        Submit-Review -comments $inline
     } catch {
         Write-Warning "Submitting inline comments failed: $_  - falling back to summary-only"
     }
