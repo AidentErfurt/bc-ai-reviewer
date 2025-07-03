@@ -1002,7 +1002,14 @@ Example of an empty-but-valid result:
         $file = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
         if (-not $file) { continue }
 
-        $ln = [int]$c.line
+        # --- validate the line number ------------------------------------------------
+        [int]$ln = 0
+        if (-not [int]::TryParse($c.line, [ref]$ln) -or $ln -le 0) {
+            Write-Verbose "Skipping invalid line number '$($c.line)' in $($c.path)"
+            continue
+        }
+        # -----------------------------------------------------------------------------
+
         $side = 'RIGHT'   # default
 
         # Did the model point at a *deleted* line?
@@ -1015,10 +1022,12 @@ Example of an empty-but-valid result:
             continue
         }
 
-        [pscustomobject]@{
+        # return a **hashtable** – not a PSCustomObject – so Add-ReviewComment receives
+        # a [hashtable] and no type-conversion error is thrown
+        @{
             path = $file.path
             line = $ln
-            side = $side # 'RIGHT' or 'LEFT'
+            side = $side   # 'RIGHT' or 'LEFT'
             body = $c.comment
         }
     }
