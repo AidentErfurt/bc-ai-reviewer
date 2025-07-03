@@ -278,13 +278,13 @@ Begin {
             switch ($line[0]) {
 
                 '+' {                       # insertion → appears in new file
-                    $diffPos++
+                    ++$diffPos
                     $current.mappings[$newLine] = $diffPos
                     $newLine++
                 }
 
                 ' ' {                       # context   → still present
-                    $diffPos++
+                    ++$diffPos
                     $current.mappings[$newLine] = $diffPos
                     $newLine++
                 }
@@ -1002,7 +1002,7 @@ Example of an empty-but-valid result:
             if ($null -ne $pos) {
                 [pscustomobject]@{
                     path     = $c.path
-                    position = $pos + 1      # GitHub wants 1-based for pr reviews
+                    position = $pos      # already 1-based
                     body     = $c.comment
                 }
             } else {
