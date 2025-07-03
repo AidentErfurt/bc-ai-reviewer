@@ -591,6 +591,15 @@ Process {
     }
     Write-Host "Generating diff with $DiffContextLines lines of context..."
     $patch = (& git diff --unified=$DiffContextLines --find-renames --no-color $baseRef $headRef | Out-String)
+    Write-Host '::group::Git diff (with line numbers)'
+
+    $ln = 0
+    $patch -split "`n" | ForEach-Object {
+        # "{0,6}" = right-align 6-wide so the numbers line up
+        "{0,6}: {1}" -f (++$ln), $_
+    } | Write-Host
+
+    Write-Host '::endgroup::'
 
     # Guardrail: abort if the diff is ridiculously large
     $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
@@ -993,7 +1002,7 @@ Example of an empty-but-valid result:
             if ($null -ne $pos) {
                 [pscustomobject]@{
                     path     = $c.path
-                    position = $pos          # already 0-based
+                    position = $pos + 1      # GitHub wants 1-based for pr reviews
                     body     = $c.comment
                 }
             } else {
