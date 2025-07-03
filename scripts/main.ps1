@@ -523,13 +523,21 @@ closingIssuesReferences(first: 50) {
         [string]$ReviewId,
         [hashtable]$Comment
     )
-        # Use the Pull Request Comments endpoint for inline comments (GitHub REST)
-        Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/comments" -Body @{
-            body      = $Comment.body
-            commit_id = $pr.head.sha
-            path      = $Comment.path
-            side      = $Comment.side
-            line      = $Comment.line
+        # # Use the Pull Request Comments endpoint for inline comments (GitHub REST)
+        # Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/comments" -Body @{
+        #     body      = $Comment.body
+        #     commit_id = $pr.head.sha
+        #     path      = $Comment.path
+        #     side      = $Comment.side
+        #     line      = $Comment.line
+        # }
+
+        # Use Review Comments endpoint
+        Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews/$ReviewId/comments" -Body @{
+            body = $Comment.body
+            path = $Comment.path
+            side = $Comment.side        # 'RIGHT' or 'LEFT'
+            line = $Comment.line        # diff-relative line number
         }
     }
 
