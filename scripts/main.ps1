@@ -534,16 +534,17 @@ closingIssuesReferences(first: 50) {
     
     function Add-ReviewComment {
     param(
-        [string]$ReviewId,
-        [hashtable]$Comment
+        [string]   $ReviewId,   # id returned by New-Review
+        [hashtable]$Comment     # @{ path; line; side; body }
     )
-        # Use the Pull Request Comments endpoint for inline comments (GitHub REST)
-        Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/comments" -Body @{
+    Invoke-GitHub -Method POST `
+        -Path "/repos/$owner/$repo/pulls/$prNumber/reviews/$ReviewId/comments" `
+        -Body @{
             body      = $Comment.body
-            commit_id = $pr.head.sha
+            commit_id = $pr.head.sha         # head-commit SHA
             path      = $Comment.path
-            side      = $Comment.side
-            line      = $Comment.line
+            side      = $Comment.side        # 'RIGHT' or 'LEFT'
+            line      = $Comment.line        # file-relative line no on that side
         }
     }
 
