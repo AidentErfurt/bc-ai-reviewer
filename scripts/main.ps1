@@ -900,7 +900,7 @@ $BasePromptExtra
 
 **When you answer:**
 * Provide **up to $maxInline concise inline comments** if you spot something worth improving.
-* `"line"` **must be the line-number of the *new* file** (i.e. the number shown after the `+` or space inside the diff, *not* the running counter inside the unified diff). Otherwise the comment will be ignored.
+* Only use a line number that you see in the green (RIGHT) part of the diff hunk or the comment will be ignored.
 * If you find nothing, set `"comments": []`.
 * Keep acknowledgments short and neutral.
 * Output GitHub-flavoured Markdown inside `"comment"` fields only.
@@ -991,7 +991,7 @@ Example of an empty-but-valid result:
     if ($MaxComments -gt 0 -and $review.comments.Count -gt $MaxComments) {
         $review.comments = $review.comments[0..($MaxComments-1)]
     }
-    
+
     $inline = @(
         foreach ($c in $review.comments) {
 
