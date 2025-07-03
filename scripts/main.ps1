@@ -714,15 +714,9 @@ Process {
                 Write-Host "-> No app.json found for this file"
             }
         }
-
-        # 4) if *none* of the changed files live under an app, include *all* apps
-        if (-not $relevantApps.Keys.Count) {
-            Write-Host "-> No specific app hits; including all apps"
-            foreach ($a in $allAppJsons) { $relevantApps[$a] = $true }
-        }
         Write-Host '::endgroup::'
 
-        # 5) now queue context files for each app.json we care about
+        # 4) now queue context files for each app.json we care about
         foreach ($appJson in $relevantApps.Keys) {
             $appRoot    = Split-Path $appJson -Parent
             $relAppJson = [IO.Path]::GetRelativePath($repoRoot, $appJson) -replace '\\','/'
