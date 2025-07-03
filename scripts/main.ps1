@@ -256,18 +256,19 @@ Begin {
                 }
                 $newLine = 0
                 $diffPos = 0               # reset for the new FILE (not for hunks)
+                 ++$diffPos                # count this header line!
                 continue
             }
 
             if (-not $current) { continue }  # still before first file diff
 
-            # keep full text for the prompt  ➜  already in GitHub’s count
+            # keep full text for the prompt  ->  already in GitHub’s count
             $current.diffLines += $line
-            ++$diffPos                            # COUNT **EVERY** LINE WE ADD
 
             # ── hunk header (@@ -a,b +c,d @@) ────────────────────────────────
             if ($line -match '^@@ -\d+(?:,\d+)? \+(?<new>\d+)(?:,\d+)? @@') {
                 $newLine = [int]$Matches.new      # reset line-number pointer only
+                ++$diffPos                        # count the hunk header too!
                 continue                          # (counter keeps running!)
             }
 
@@ -278,6 +279,7 @@ Begin {
                 ' ' { $current.mappings[$newLine] = $diffPos; $newLine++ }
                 # '-' affects the position counter already – nothing else to do
             }
+            ++$diffPos
         }
 
         if ($current) { $files += $current }      # flush last file
@@ -984,7 +986,7 @@ Example of an empty-but-valid result:
             # fallback: model gave a diff-line position instead of new-file line
             if ($null -eq $pos -and
                 [int]$c.line -ge 1 -and
-                [int]$c.line -le $file.diffLines.Count) {
+                [int]$c.line -lt $file.diffLines.Count) {
                 $pos = [int]$c.line            # GitHub expects 1-based already
             }
 
