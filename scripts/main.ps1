@@ -881,6 +881,7 @@ $BasePromptExtra
 
 **When you answer:**
 * Provide **up to $maxInline concise inline comments** if you spot something worth improving.
+* `"line"` **must be the line-number of the *new* file** (i.e. the number shown after the `+` or space inside the diff, *not* the running counter inside the unified diff). Otherwise the comment will be ignored.
 * If you find nothing, set `"comments": []`.
 * Keep acknowledgments short and neutral.
 * Output GitHub-flavoured Markdown inside `"comment"` fields only.
@@ -979,6 +980,14 @@ Example of an empty-but-valid result:
 
             # $file.lineMap   = [ordered]@{ newFileLine => diffPosition0Based }
             $pos = $file.lineMap[[int]$c.line]  # hashtable lookup, NOT IndexOf, returns the 0-based diff position
+
+            # fallback: model gave a diff-line position instead of new-file line
+            if ($null -eq $pos -and
+                [int]$c.line -ge 1 -and
+                [int]$c.line -le $file.diffLines.Count) {
+                $pos = [int]$c.line            # GitHub expects 1-based already
+            }
+
             if ($null -ne $pos) {
                 [pscustomobject]@{
                     path     = $c.path
