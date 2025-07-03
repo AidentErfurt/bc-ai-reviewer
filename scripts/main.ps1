@@ -545,76 +545,77 @@ closingIssuesReferences(first: 50) {
     }
 
     ############################################################################
-    # Helper: Parse a unified diff into file objects for review  (TS approach)
+    # Helper: Parse a unified diff into file objects for review
     ############################################################################
     function Parse-Patch {
         param([string]$Patch)
 
         $files   = @()
         $current = $null
-        $newLine = 0
+        $leftLn  = 0
+        $rightLn = 0
 
         foreach ($line in $Patch -split "`n") {
 
-            # ── diff header → start of new file ────────────────────────────────
-            if ($line -match '^diff\s--git\s+a\/.+\s+b\/(?<path>.+)$') {
-
-                # push previous chunk if it had diff lines
-                if ($current -and $current.path -and $current.diffLines.Count) {
-                    $files += $current
-                }
-
-                # start new chunk
-                $current = [ordered]@{
-                    path      = $Matches.path
+            # --- diff header → start new file -----------------------------------
+            if ($line -match '^diff --git a\/.+ b\/(?<path>.+)$') {
+                if ($current) { $files += $current }
+                $current = @{
+                    path     = $Matches.path
+                    diff     = @()
+                    leftMap  = @{}   # old-file   L# → diff index
+                    rightMap = @{}   # new-file   L# → diff index
                     diffLines = @()
-                    lineMap   = @{}
                 }
-                $newLine = 0
+                $leftLn  = 0
+                $rightLn = 0
                 continue
             }
 
-            if (-not $current) { continue }   # skip until first file header
+            if (-not $current) { continue }
 
-            # collect diff text verbatim
+            $current.diff += $line
             $current.diffLines += $line
 
-            # ── hunk header @@ -m,n +p,q @@ → capture *p*
-            if ($line -match '^@@ -\d+(?:,\d+)? \+(?<p>\d+)(?:,(?<q>\d+))? @@') {
-                $newLine = [int]$Matches.p
+            # --- hunk header -----------------------------------------------------
+            if ($line -match '^@@ -(?<l>\d+)(?:,\d+)? \+(?<r>\d+)(?:,\d+)? @@') {
+                $leftLn  = [int]$Matches.l
+                $rightLn = [int]$Matches.r
                 continue
             }
 
             if ($line.Length -eq 0) { continue }
 
             switch ($line[0]) {
-                '+' {                    # insertion
-                    $current.lineMap[$newLine] = $current.diffLines.Count
-                    $newLine++
+                '-' {                     # deletion → only LEFT moves
+                    $current.leftMap[$leftLn] = $current.diff.Count
+                    $leftLn++
                 }
-                ' ' {                    # context
-                    $current.lineMap[$newLine] = $current.diffLines.Count
-                    $newLine++
+                '+' {                     # addition → only RIGHT moves
+                    $current.rightMap[$rightLn] = $current.diff.Count
+                    $rightLn++
                 }
-                '-' { }                  # deletion – doesn’t consume new-file line
+                ' ' {                     # context → both sides move
+                    $current.leftMap[$leftLn]  = $current.diff.Count
+                    $current.rightMap[$rightLn] = $current.diff.Count
+                    $leftLn++; $rightLn++
+                }
             }
         }
 
-        # tail-piece
-        if ($current -and $current.path -and $current.diffLines.Count) {
-            $files += $current
-        }
+        if ($current) { $files += $current }
 
-        # emit PSCustomObjects that the rest of your pipeline already expects
-        foreach ($f in $files) {
+        # emit objects
+        $files | ForEach-Object {
             [pscustomobject]@{
-                path      = $f.path
-                diff      = "```diff`n$($f.diffLines -join "`n")`n````"
-                lineMap   = $f.lineMap
-                diffLines = $f.diffLines
+                path     = $_.path
+                diff     = "```diff`n$($_.diff -join "`n")`n````"
+                leftMap  = $_.leftMap
+                rightMap = $_.rightMap
             }
         }
     }
+
 
     ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode…
@@ -974,7 +975,7 @@ $BasePromptExtra
 
 **When you answer:**
 * Provide **up to $maxInline concise inline comments** if you spot something worth improving.
-* Only use a line number that you see in the green (RIGHT) part of the diff hunk or the comment will be ignored.
+* Use the exact line number you see on either side of the hunk. If it's a removed line, the comment will go on the LEFT side.
 * If you find nothing, set `"comments": []`.
 * Keep acknowledgments short and neutral.
 * Output GitHub-flavoured Markdown inside `"comment"` fields only.
@@ -1067,32 +1068,31 @@ Example of an empty-but-valid result:
         $review.comments = $review.comments[0..($MaxComments-1)]
     }
 
-    $inline = @(
-        foreach ($c in $review.comments) {
+    $inline = foreach ($c in $review.comments) {
 
-            $file = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
-            if (-not $file) { continue }       # not part of diff
+        $file = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
+        if (-not $file) { continue }
 
-            $newLine = [int]$c.line            # what the model sent
-            $isReal  = $file.lineMap.ContainsKey($newLine)
+        $ln = [int]$c.line
+        $side = 'RIGHT'   # default
 
-            # ----------------------------------------------------------------
-            # Case A –– model gave a *new-file* line number  -> use line/side
-            # ----------------------------------------------------------------
-            if ($isReal) {
-                [pscustomobject]@{
-                    path = $c.path
-                    line = $newLine          # 1-based new-file line
-                    side = 'RIGHT'           # always the “after” side
-                    body = $c.comment
-                }
-                continue
-            }
-            Write-Verbose "Model requested unknown line $($c.line) in $($c.path) -> skipped."
+        # Did the model point at a *deleted* line?
+        if ($file.rightMap.ContainsKey($ln)) {
+            $side = 'RIGHT'
+        } elseif ($file.leftMap[$ln]) {
+            $side = 'LEFT'
+        } else {
+            Write-Verbose "Skipping unknown line $ln in $($file.path)"
+            continue
         }
-    )
 
-
+        [pscustomobject]@{
+            path = $file.path
+            line = $ln
+            side = $side
+            body = $c.comment
+        }
+    }
 
     # Cap inline comments only if a positive limit is specified (0 = unlimited)
     if ($MaxComments -gt 0) {
@@ -1122,7 +1122,7 @@ Example of an empty-but-valid result:
 
     # 9.2 add threads (each inline comment)
     foreach ($c in $inline) {
-        Add-ReviewThread -ReviewId $reviewId -CommitOid $headSha -Path $c.path -Line $c.line -Body $c.body -Side 'RIGHT'
+        Add-ReviewThread -ReviewId $reviewId -CommitOid $headSha -Path $c.path -Line $c.line -Body $c.body -Side $c.side
     }
 
     # 9.3 finally submit (or leave pending if no inline comments)
