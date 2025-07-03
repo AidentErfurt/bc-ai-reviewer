@@ -241,7 +241,7 @@ Begin {
         $files   = @()
         $current = $null
         $newLine = 0
-        $diffPos = -1          # 0-based position inside each hunk
+        $diffPos = 0         # 1-based position inside each hunk
 
         foreach ($line in $patch -split "`n") {
 
@@ -255,21 +255,21 @@ Begin {
                 $current = [ordered]@{
                     path      = $Matches.path
                     diffLines = @()
-                    mappings  = @{}         # new-file line → diff position
+                    mappings  = @{}         # new-file line -> diff position
                 }
                 $newLine = 0
-                $diffPos = -1
+                $diffPos = 0 # reset for the new file
                 continue
             }
 
-            if (-not $current) { continue }  # we’re still before the first diff
+            if (-not $current) { continue }  # we are still before the first diff
 
             $current.diffLines += $line      # keep full diff text for the prompt
 
-            # ── hunk header  (@@ -12,7 +15,8 @@)  ──────────────────────────
+            # hunk header  (@@ -12,7 +15,8 @@)
             if ($line -match '^@@ -\d+(?:,\d+)? \+(?<new>\d+)(?:,\d+)? @@') {
                 $newLine = [int]$Matches.new
-                $diffPos = -1               # reset position counter per hunk
+                $diffPos = 0               # reset position counter per hunk
                 continue
             }
 
@@ -277,19 +277,19 @@ Begin {
 
             switch ($line[0]) {
 
-                '+' {                       # insertion → appears in new file
+                '+' {                       # insertion -> appears in new file
                     ++$diffPos
                     $current.mappings[$newLine] = $diffPos
                     $newLine++
                 }
 
-                ' ' {                       # context   → still present
+                ' ' {                       # context   -> still present
                     ++$diffPos
                     $current.mappings[$newLine] = $diffPos
                     $newLine++
                 }
 
-                '-' {                       # deletion  → not in new file
+                '-' {                       # deletion  -> not in new file
                     $diffPos++              # …but it *does* occupy a diff line
                 }
 
@@ -307,7 +307,7 @@ Begin {
             [pscustomobject]@{
                 path    = $f.path
                 diff    = "```diff`n$($f.diffLines -join "`n")`n````"
-                lineMap = $f.mappings       # hashtable: new-file line → position
+                lineMap = $f.mappings       # hashtable: new-file line -> position
             }
         }
     }
