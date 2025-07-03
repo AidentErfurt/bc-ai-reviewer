@@ -287,6 +287,7 @@ Begin {
         foreach ($f in $files) {
             [pscustomobject]@{
                 path    = $f.path
+                diffLines = $f.diffLines
                 diff    = "```diff`n$($f.diffLines -join "`n")`n````"
                 lineMap = $f.mappings
             }
