@@ -420,8 +420,12 @@ closingIssuesReferences(first: 50) {
         if ($review.summary.Length -gt 65000) {
             $review.summary = $review.summary.Substring(0,65000) + "`n…(truncated)"
         }
-        $body = @{ body = $review.summary }
-        $body.event = if ($ApproveReviews) { $review.suggestedAction.ToUpper() } else { 'COMMENT' }
+        $body = @{
+        commit_id = $pr.head.sha
+        body      = $review.summary
+        event     = if ($ApproveReviews) { $review.suggestedAction.ToUpper() } else { 'COMMENT' }
+        comments  = $inline             # ← array you already built
+        }
         Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body $body
     }
 
@@ -1052,11 +1056,6 @@ Example of an empty-but-valid result:
         # 1. create the review (summary only)
         $reviewResponse = New-Review
         $reviewId = $reviewResponse.id
-
-        # 2. add inline comments, if any
-        foreach ($c in $inline) {
-            Add-ReviewComment -ReviewId $reviewId -Comment $c
-        }
     } catch {
         Write-Warning "Submitting inline comments failed: $_  - falling back to summary-only"
     }
