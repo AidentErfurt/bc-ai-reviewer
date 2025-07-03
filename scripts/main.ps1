@@ -1007,11 +1007,11 @@ Example of an empty-but-valid result:
             $f = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
             if (-not $f) { continue }
 
-            $pos = $f.lineMap.IndexOf([int]$c.line)   # search the array
-            if ($pos -ge 0) {
-                $inline += @{
+            $idx = [int]$c.line - 1
+            if ($idx -lt $f.lineMap.Count) {
+                [pscustomobject]@{
                     path = $c.path
-                    line = $pos + 1          # GitHub expects 1-based diff line no.
+                    line = $f.lineMap[$idx]   # already diff-relative & 1-based
                     side = 'RIGHT'
                     body = $c.comment
                 }
