@@ -249,9 +249,9 @@ Begin {
         param($Owner,$Repo,[int]$PrNumber)
 $query = @"
 query (
-  \$owner:String!,\$repo:String!,\$pr:Int!){
-  repository(owner:\$owner,name:\$repo){
-    pullRequest(number:\$pr){ id headRefOid }
+  `$owner:String!,`$repo:String!,`$pr:Int!){
+  repository(owner:`$owner,name:`$repo){
+    pullRequest(number:`$pr){ id headRefOid }
   }
 }
 "@
@@ -264,11 +264,11 @@ query (
         param($PullId,$CommitOid,[string]$Body)
 $gql = @"
 mutation (
-  \$pr:ID!,\$sha:GitObjectID!,\$body:String!){
+  `$pr:ID!,`$sha:GitObjectID!,`$body:String!){
   createPullRequestReview(input:{
-    pullRequestId:\$pr
-    commitOID:     \$sha
-    body:          \$body
+    pullRequestId:`$pr
+    commitOID:     `$sha
+    body:          `$body
   }){ pullRequestReview{ id url } }
 }
 "@
@@ -279,14 +279,14 @@ mutation (
         param($ReviewId,$CommitOid,$Path,[int]$Line = $null,[string]$Body,[string]$Side='RIGHT')
 $gql = @"
 mutation (
-  \$rid:ID!,\$sha:GitObjectID!,\$path:String!,\$ln:Int!,\$side:DiffSide!,\$body:String!){
+  `$rid:ID!,`$sha:GitObjectID!,`$path:String!,`$ln:Int!,`$side:DiffSide!,`$body:String!){
   addPullRequestReviewThread(input:{
-    pullRequestReviewId: \$rid
-    commitOID:           \$sha
-    path:                \$path
-    line:                \$ln
-    side:                \$side
-    body:                \$body
+    pullRequestReviewId: `$rid
+    commitOID:           `$sha
+    path:                `$path
+    line:                `$ln
+    side:                `$side
+    body:                `$body
   }){ thread{ id } }
 }
 "@
@@ -297,8 +297,8 @@ mutation (
         param($ReviewId,[ValidateSet('COMMENT','APPROVE','REQUEST_CHANGES')]$Event)
 $gql = @"
 mutation (
-  \$rid:ID!,\$ev:PullRequestReviewEvent!){
-  submitPullRequestReview(input:{ pullRequestReviewId:\$rid event:\$ev }){
+  `$rid:ID!,`$ev:PullRequestReviewEvent!){
+  submitPullRequestReview(input:{ pullRequestReviewId:`$rid event:`$ev }){
     pullRequestReview{ url state }
   }
 }
