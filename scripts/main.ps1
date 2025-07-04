@@ -914,7 +914,7 @@ Example of an empty-but-valid result:
     }
 
     $raw    = $resp.choices[0].message.content.Trim() -replace '^```json','' -replace '```$',''
-    Write-Host "[DEBUG] Model returned:"
+    Write-Host "[DEBUG] Model returned: "
     Write-Host $raw
 
     # Model is nice and provides regex snippets (which break the json) -> sanitize any “\x” sequences where x != one of the valid JSON escapes
