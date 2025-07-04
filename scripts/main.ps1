@@ -982,17 +982,6 @@ Example of an empty-but-valid result:
     # 8. Build inline comment objects (line/side only - robust anchor check)
     ########################################################################
 
-    # 8.1 Generate a minimal diff (-U3) and parse it
-    Write-Host 'Generating minimal diff to validate anchors (-U3)...'
-    $anchorPatch     = (& git diff --unified=3 --find-renames --diff-filter=ACDMR --no-color $baseRef $headRef | Out-String)
-    $anchorFilesRaw  = Parse-Patch $anchorPatch
-
-    # Build a lookup: path → parsed‐diff object
-    $anchorFiles = @{ }
-    foreach ($f in $anchorFilesRaw) {
-        $anchorFiles[$f.path] = $f
-    }
-
     # 8.2 Trim AI output to $MaxComments
     if ($MaxComments -gt 0 -and $review.comments.Count -gt $MaxComments) {
         Write-Host "Limiting model output from $($review.comments.Count) to $MaxComments comments"
@@ -1002,33 +991,33 @@ Example of an empty-but-valid result:
     $inline = foreach ($c in $review.comments) {
         Write-Host "Processing proposed comment: path=$($c.path) line=$($c.line)"
 
-        # 1) locate the abs‐map for this file
+        # locate the absolute‐line → diff‐index map for this file
         $map = $absLineMap[$c.path]
         if (-not $map) {
             Write-Host "  Skipping - file not in diff"
             continue
         }
 
-        # 2) parse & validate the file‐line number
+        # parse & validate the file‐line number
         [int]$ln = 0
         if (-not [int]::TryParse($c.line, [ref]$ln) -or $ln -le 0) {
             Write-Host "  Skipping - invalid line '$($c.line)'"
             continue
         }
 
-        # 3) lookup the diff‐index
+        # lookup the diff‐index
         if (-not $map.ContainsKey($ln)) {
             Write-Host "  Skipping - line $ln not present in diff"
             continue
         }
         $diffIndex = $map[$ln]
 
-        # 4) determine side from your rightMap/leftMap if needed
-        $file   = $files | Where-Object path -EQ $c.path
-        $side   = $file.rightMap.ContainsKey($ln) ? 'RIGHT' : 'LEFT'
+        # determine side
+        $file = $files | Where-Object path -EQ $c.path
+        $side = if ($file.rightMap.ContainsKey($ln)) { 'RIGHT' } else { 'LEFT' }
         Write-Host "  Will comment on $side side, at diff index $diffIndex"
 
-        # 5) emit inline object (no position)
+        # emit inline object
         @{
             path = $c.path
             line = $ln
@@ -1044,6 +1033,7 @@ Example of an empty-but-valid result:
     } else {
         Write-Host "Posting $($inline.Count) inline comments"
     }
+
 
     # ########################################################################
     # # 9. Create review
