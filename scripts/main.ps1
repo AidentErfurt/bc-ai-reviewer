@@ -930,18 +930,17 @@ Example of an empty-but-valid result:
     ########################################################################
 
     # Build inline comment objects
-        $inline = foreach ($c in $review.comments) {
-            $file = $relevant | Where-Object path -eq $c.path
-            if (-not $file) { continue }
+    $inline = foreach ($c in $review.comments) {
+        $file = $relevant | Where-Object path -eq $c.path
+        if (-not $file) { continue }
 
-            $lineNo = [int]$c.line
-            if ($lineNo -lt 1 -or $lineNo -gt $file.lineMap.Count) { continue }
+        $lineNo = [int]$c.line
+        if ($lineNo -lt 1 -or $lineNo -gt $file.lineMap.Count) { continue }
 
-            [pscustomobject]@{
-                path     = $c.path
-                position = $file.lineMap[$lineNo - 1]  # GitHub “position”
-                body     = $c.comment
-            }
+        [pscustomobject]@{
+            path     = $c.path
+            position = $file.lineMap[$lineNo - 1]  # GitHub “position”
+            body     = $c.comment
         }
     }
 
