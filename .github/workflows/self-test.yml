@@ -23,9 +23,9 @@ jobs:
         uses: ./
         with:
           GITHUB_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
-          AI_PROVIDER:         openrouter
-          AI_MODEL:            microsoft/mai-ds-r1:free
-          AI_API_KEY:          ${{ secrets.OPENROUTER_API_KEY }}
+          AI_PROVIDER:         azure
+          AI_MODEL:            ${{ secrets.AZURE_ENDPOINT }}
+          AI_API_KEY:          ${{ secrets.AZUREOPENAIKEYO3MINI }}
           MAX_COMMENTS:        10
           DIFF_CONTEXT_LINES:  25
           APPROVE_REVIEWS:     false
