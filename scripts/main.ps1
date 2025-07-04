@@ -977,10 +977,16 @@ Example of an empty-but-valid result:
     # 8. Build inline comment objects (line/side only - robust anchor check)
     ########################################################################
 
-    # 8.1 Build an *anchor map* from a minimal diff (-U3)
+    # 8.1 Generate a minimal diff (-U3) and build a true path→file map
     Write-Host 'Generating minimal diff to validate anchors (-U3)…'
     $anchorPatch = (& git diff --unified=3 --find-renames --diff-filter=ACDMR --no-color $baseRef $headRef | Out-String)
-    $anchorFiles = Parse-Patch $anchorPatch | Group-Object path -AsHashTable -AsString
+    $anchorFilesRaw = Parse-Patch $anchorPatch
+
+    # Build a hashtable: path -> parsed‐diff object
+    $anchorFiles = @{}
+    foreach ($f in $anchorFilesRaw) {
+        $anchorFiles[$f.path] = $f
+    }
 
     # 8.2 Trim AI output to $MaxComments first
     if ($MaxComments -gt 0 -and $review.comments.Count -gt $MaxComments) {
@@ -993,26 +999,23 @@ Example of an empty-but-valid result:
         Write-Host "----"
         Write-Host "Processing proposed comment: path=$($c.path) line=$($c.line)"
 
-        # ------------------------------------------------------------
-        # A) Locate the *anchor* file built from -U3
-        # ------------------------------------------------------------
+        # A) Find the parsed‐diff anchor for this path
         $anchorFile = $anchorFiles[$c.path]
         if (-not $anchorFile) {
             Write-Host "  Skipping - file not present in minimal diff"
             continue
         }
 
-        # ------------------------------------------------------------
-        # B) Validate line number & find side
-        # ------------------------------------------------------------
+        # B) Validate & parse the line number
         [int]$ln = 0
-        if (-not [int]::TryParse($c.line,[ref]$ln) -or $ln -le 0) {
+        if (-not [int]::TryParse($c.line, [ref]$ln) -or $ln -le 0) {
             Write-Host "  Skipping - invalid line number '$($c.line)'"
             continue
         }
 
+        # C) Determine side
         $side = if ($anchorFile.rightMap.ContainsKey($ln)) { 'RIGHT' }
-                elseif ($anchorFile.leftMap.ContainsKey($ln)) { 'LEFT' }
+                elseif ($anchorFile.leftMap.ContainsKey($ln))  { 'LEFT'  }
                 else { $null }
 
         if (-not $side) {
@@ -1022,9 +1025,7 @@ Example of an empty-but-valid result:
 
         Write-Host "  Will comment on $side side, line $ln"
 
-        # ------------------------------------------------------------
-        # C) Emit inline object - line/side only, no position
-        # ------------------------------------------------------------
+        # D) Emit the inline comment object (no `position`)
         @{
             path = $c.path
             line = $ln
@@ -1033,14 +1034,13 @@ Example of an empty-but-valid result:
         }
     }
 
-    # 8.3 Final cap enforced again (GitHub limit = 1000)
+    # 8.3 Final cap (GitHub limit = 1000)
     if ($MaxComments -gt 0 -and $inline.Count -gt $MaxComments) {
         Write-Host "Truncating inline comments: first $MaxComments of $($inline.Count)"
         $inline = $inline[0..($MaxComments-1)]
     } else {
         Write-Host "Posting $($inline.Count) inline comments"
     }
-
 
     # ########################################################################
     # # 9. Create review
