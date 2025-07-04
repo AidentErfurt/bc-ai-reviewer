@@ -358,7 +358,7 @@ closingIssuesReferences(first: 50) {
                     $line = ([regex]::Matches($Patch.Substring(0, $m.Index), "`n")).Count + 1
 
                     $snippet = $m.Value.Replace("`r",' ').Replace("`n",' ')
-                    if ($snippet.Length -gt $MaxLen) { $snippet = $snippet.Substring(0,$MaxLen) + '…' }
+                    if ($snippet.Length -gt $MaxLen) { $snippet = $snippet.Substring(0,$MaxLen) + '...' }
 
                     $hits += [pscustomobject]@{
                         Rule    = $ruleName
@@ -418,7 +418,7 @@ closingIssuesReferences(first: 50) {
     function New-Review {
         # guardrail for huge summaries
         if ($review.summary.Length -gt 65000) {
-            $review.summary = $review.summary.Substring(0,65000) + "`n…(truncated)"
+            $review.summary = $review.summary.Substring(0,65000) + "`n...(truncated)"
         }
         $body = @{
         commit_id = $pr.head.sha
@@ -539,7 +539,7 @@ closingIssuesReferences(first: 50) {
 
 
     ############################################################################
-    # Begin block: parameter validation, splitting globs, strict mode…
+    # Begin block: parameter validation, splitting globs, strict mode...
     ############################################################################
 
     $ErrorActionPreference = 'Stop'
@@ -990,7 +990,7 @@ Example of an empty-but-valid result:
     ########################################################################
 
     # 8.1 Generate a minimal diff (-U3) and parse it
-    Write-Host 'Generating minimal diff to validate anchors (-U3)…'
+    Write-Host 'Generating minimal diff to validate anchors (-U3)...'
     $anchorPatch     = (& git diff --unified=3 --find-renames --diff-filter=ACDMR --no-color $baseRef $headRef | Out-String)
     $anchorFilesRaw  = Parse-Patch $anchorPatch
 
@@ -1044,17 +1044,6 @@ Example of an empty-but-valid result:
         }
     }
 
-        Write-Host "  Will comment on $side side, line $ln"
-
-        # D) emit inline comment
-        @{
-            path = $c.path
-            line = $ln
-            side = $side
-            body = $c.comment
-        }
-    }
-
     # 8.3 Enforce overall cap
     if ($MaxComments -gt 0 -and $inline.Count -gt $MaxComments) {
         Write-Host "Truncating inline comments: first $MaxComments of $($inline.Count)"
@@ -1062,7 +1051,6 @@ Example of an empty-but-valid result:
     } else {
         Write-Host "Posting $($inline.Count) inline comments"
     }
-
 
     # ########################################################################
     # # 9. Create review
