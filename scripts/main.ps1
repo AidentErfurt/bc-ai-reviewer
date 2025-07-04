@@ -421,10 +421,10 @@ closingIssuesReferences(first: 50) {
             $review.summary = $review.summary.Substring(0,65000) + "`n...(truncated)"
         }
         $body = @{
-        commit_id = $pr.head.sha
-        body      = $review.summary
-        event     = if ($ApproveReviews) { $review.suggestedAction.ToUpper() } else { 'COMMENT' }
-        comments  = $inline             # ← array you already built
+            commit_id = $pr.head.sha
+            body      = $review.summary
+            event     = if ($ApproveReviews) { $review.suggestedAction.ToUpper() } else { 'COMMENT' }
+            comments  = $inline
         }        
         Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body $body
     }
@@ -933,9 +933,10 @@ Example of an empty-but-valid result:
         if ($lineNo -lt 1 -or $lineNo -gt $file.lineMap.Count) { continue }
 
         [pscustomobject]@{
-            path     = $c.path
-            position = $file.lineMap[$lineNo - 1]  # GitHub “position”
-            body     = $c.comment
+            path = $c.path
+            line = [int]$c.line      # use the real file line number
+            body = $c.comment
+            side = 'RIGHT'
         }
     }
 
