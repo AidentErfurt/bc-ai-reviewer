@@ -459,37 +459,6 @@ closingIssuesReferences(first: 50) {
         throw "Failed to sanitise AI response after $MaxAttempts attempts."
     }
 
-    ############################################################
-    # 0 · tiny JS shim that wraps **parse‑diff**
-    ############################################################
-    $jsSource = @'
-import { readFileSync } from "fs";
-import parseDiff from "parse-diff";
-
-const diff = readFileSync(0, "utf8");              // stdin from PowerShell
-
-const files = parseDiff(diff).map(f => ({
-  path: f.to === "/dev/null" ? null : f.to,
-  diff:
-    "```diff\n" +
-    f.chunks
-      .map(c =>
-        c.content +
-        "\n" +
-        c.changes
-          .map(ch => `${ch.ln ?? ch.ln2} ${ch.content}`)
-          .join("\n"),
-      )
-      .join("\n") +
-    "\n```",
-  lineMap: f.chunks.flatMap(c =>
-    c.changes.filter(ch => ch.type !== "del").map(ch => ch.ln),
-  ),
-}));
-
-console.log(JSON.stringify(files));
-'@
-
     ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode...
     ############################################################################
@@ -568,7 +537,8 @@ Process {
         throw "The generated diff is $($byteSize) bytes (> $maxBytes). Consider reducing the scope."
     }
 
-    # Parse with **parse‑diff** via NodeJS
+    # Parse with **parse-diff** via NodeJS
+    $jsSource = Get-Content -Raw (Join-Path $PSScriptRoot 'parse-diff.js')
     $node   = (Get-Command node).Source
     $tmpJs  = Join-Path $env:RUNNER_TEMP 'parse-diff.js'
     Set-Content $tmpJs -Value $jsSource -Encoding UTF8

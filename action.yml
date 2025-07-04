@@ -136,6 +136,7 @@ runs:
         node-version: 20
 
     - name: Install diff parser
+      shell: pwsh
       run: npm install --no-save parse-diff@^1.0.0
 
     - name: Run AI Code Review
