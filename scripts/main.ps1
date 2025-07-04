@@ -459,62 +459,36 @@ closingIssuesReferences(first: 50) {
         throw "Failed to sanitise AI response after $MaxAttempts attempts."
     }
 
-    ############################################################################
-    # Helper: Parse a unified diff into file objects for review
-    ############################################################################
-    function Parse-Patch {
-        param([string]$Patch)
+    ############################################################
+    # 0 · tiny JS shim that wraps **parse‑diff**
+    ############################################################
+    $jsSource = @'
+import { readFileSync } from "fs";
+import parseDiff from "parse-diff";
 
-        $files  = @()
-        $chunk  = $null
-        $leftLn = $rightLn = 0
+const diff = readFileSync(0, "utf8");              // stdin from PowerShell
 
-        foreach ($l in $Patch -split "`n") {
+const files = parseDiff(diff).map(f => ({
+  path: f.to === "/dev/null" ? null : f.to,
+  diff:
+    "```diff\n" +
+    f.chunks
+      .map(c =>
+        c.content +
+        "\n" +
+        c.changes
+          .map(ch => `${ch.ln ?? ch.ln2} ${ch.content}`)
+          .join("\n"),
+      )
+      .join("\n") +
+    "\n```",
+  lineMap: f.chunks.flatMap(c =>
+    c.changes.filter(ch => ch.type !== "del").map(ch => ch.ln),
+  ),
+}));
 
-            if ($l -match '^diff --git a\/.+ b\/(?<p>.+)$') {
-                if ($chunk) { $files += $chunk }
-                $chunk = @{
-                    path        = $Matches.p
-                    diffLines   = @()
-                    leftMap     = @{}
-                    rightMap    = @{}
-                    absRightMap = @{}
-                }
-                continue
-            }
-
-            if (-not $chunk) { continue }
-            $chunk.diffLines += $l
-            $idx = $chunk.diffLines.Count - 1     # 0-based diff index
-
-            # new hunk header -> reset bases
-            if ($l -match '^@@ -(?<l>\d+)(?:,\d+)? \+(?<r>\d+)(?:,\d+)? @@') {
-                $leftLn  = [int]$Matches.l
-                $rightLn = [int]$Matches.r
-                continue
-            }
-
-            if ($l.Length -eq 0) { continue }
-
-            switch ($l[0]) {
-                '-' { $chunk.leftMap[$leftLn]      = $idx; $leftLn++ }
-                '+' { $chunk.rightMap[$rightLn]    = $idx; $chunk.absRightMap[$rightLn] = $idx; $rightLn++ }
-                ' ' { $chunk.leftMap[$leftLn]      = $idx; $chunk.rightMap[$rightLn] = $idx
-                    $chunk.absRightMap[$rightLn] = $idx; $leftLn++; $rightLn++ }
-            }
-        }
-        if ($chunk) { $files += $chunk }
-
-        $files | ForEach-Object {
-            [pscustomobject]@{
-                path        = $_.path
-                diff        = "```diff`n$($_.diffLines -join "`n")`n````"
-                leftMap     = $_.leftMap
-                rightMap    = $_.rightMap
-                absRightMap = $_.absRightMap
-            }
-        }
-    }  
+console.log(JSON.stringify(files));
+'@
 
     ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode...
@@ -587,17 +561,22 @@ Process {
     Write-Host "Generating diff with $DiffContextLines lines of context..."
     $patch = (& git diff --unified=$DiffContextLines --find-renames --diff-filter=ACDMR --no-color $baseRef $headRef | Out-String)
 
-    # Guard-rail: abort if the diff is ridiculously large
+    # Guard‑rail first → abort early if diff is huge
     $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
-    $maxBytes = 500KB      # tweak here if needed
+    $maxBytes = 500KB
     if ($byteSize -gt $maxBytes) {
-        throw ("The generated diff is {0:N0} bytes (> {1:N0}). " +
-            "Consider tightening INCLUDE_PATTERNS / EXCLUDE_PATTERNS " +
-            "or splitting the PR." -f $byteSize, $maxBytes)
+        throw "The generated diff is $($byteSize) bytes (> $maxBytes). Consider reducing the scope."
     }
 
+    # Parse with **parse‑diff** via NodeJS
+    $node   = (Get-Command node).Source
+    $tmpJs  = Join-Path $env:RUNNER_TEMP 'parse-diff.js'
+    Set-Content $tmpJs -Value $jsSource -Encoding UTF8
+
+    $files  = $patch | & $node $tmpJs | ConvertFrom-Json
+
     # keep the rest of the pipeline
-    $files   = Parse-Patch $patch
+    $files = (& node $tmpJs @stdin:$patch | ConvertFrom-Json)
     Write-Host '::group::git patch (raw)'
     Write-Host $patch
     Write-Host '::endgroup::'
@@ -981,18 +960,18 @@ Example of an empty-but-valid result:
     ########################################################################
 
     # Build inline comment objects
-    $inline = foreach ($c in $review.comments) {
-        $file = $relevant | Where-Object path -eq $c.path
-        if (-not $file) { continue }
+        $inline = foreach ($c in $review.comments) {
+            $file = $relevant | Where-Object path -eq $c.path
+            if (-not $file) { continue }
 
-        [int]$n       = $c.line
-        $hasPosition  = $file.absRightMap.ContainsKey($n)
-        if (-not $hasPosition) { continue }   # must be a line that exists in the patch
+            $lineNo = [int]$c.line
+            if ($lineNo -lt 1 -or $lineNo -gt $file.lineMap.Count) { continue }
 
-        [pscustomobject]@{
-            path      = $c.path
-            position  = $file.absRightMap[$n]   # 0-based index in unified diff
-            body      = $c.comment
+            [pscustomobject]@{
+                path     = $c.path
+                position = $file.lineMap[$lineNo - 1]  # GitHub “position”
+                body     = $c.comment
+            }
         }
     }
 
