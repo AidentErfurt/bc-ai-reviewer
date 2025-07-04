@@ -538,12 +538,8 @@ Process {
     }
 
     # Parse with **parse-diff** via NodeJS
-    $jsSource = Get-Content -Raw (Join-Path $PSScriptRoot 'parse-diff.js')
-    $node   = (Get-Command node).Source
-    $tmpJs  = Join-Path $env:RUNNER_TEMP 'parse-diff.js'
-    Set-Content $tmpJs -Value $jsSource -Encoding UTF8
-
-    $files  = $patch | & $node $tmpJs | ConvertFrom-Json
+    $scriptJs = Join-Path $PSScriptRoot 'parse-diff.js'
+    $files    = $patch | & $node $scriptJs | ConvertFrom-Json
 
     # keep the rest of the pipeline
     $files = (& node $tmpJs @stdin:$patch | ConvertFrom-Json)
