@@ -24,8 +24,9 @@ jobs:
         with:
           GITHUB_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
           AI_PROVIDER:         azure
-          AI_MODEL:            ${{ secrets.AZURE_ENDPOINT }}
-          AI_API_KEY:          ${{ secrets.AZUREOPENAIKEYO3MINI }}
+          AZURE_ENDPOINT:      ${{ secrets.AZURE_ENDPOINT }}
+          AZURE_API_KEY:       ${{ secrets.AZUREOPENAIKEYO3MINI }}
+          AZURE_API_VERSION:  '2025-01-01-preview'
           MAX_COMMENTS:        10
           DIFF_CONTEXT_LINES:  25
           APPROVE_REVIEWS:     false
