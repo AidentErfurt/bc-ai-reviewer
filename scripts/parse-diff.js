@@ -1,20 +1,34 @@
-// $RUNNER_TEMP/parse-diff.js
+// scripts/parse-diff.js
+
 import { readFileSync } from 'fs';
 import parseDiff from 'parse-diff';
 
-// Read diff from stdin (piped by PowerShell)
-const diff = readFileSync(0, 'utf8');          // fd 0 == stdin
+// Read the full unified diff from stdin (fd 0)
+const diff = readFileSync(0, 'utf8');
 const files = parseDiff(diff);
 
-// Normalise the structure so PowerShell can `ConvertFrom-Json`
-const out = files.map(f => ({
-  path:  f.to === '/dev/null' ? null : f.to,
-  hunks: f.chunks.map(c => ({
-    header:  c.content,
-    // map each added/ctx line to its new-file line number
-    lineMap: c.changes
-              .filter(ch => ch.type !== 'del')
-              .map(ch => ch.ln)           // GitHub “line” you’ll use later
-  }))
-}));
+// Normalize and emit each file's path, diff text, and lineMap for PowerShell
+const out = files.map(f => {
+  const path = f.to === '/dev/null' ? null : f.to;
+
+  // Construct the unified diff snippet for this file
+  const diffLines = f.chunks.flatMap(chunk => [
+    chunk.content,                  // the "@@ -a,b +c,d @@" header
+    ...chunk.changes.map(ch => ch.content) // each line with its +/‑/space prefix
+  ]);
+
+  // Build an array of new-file line numbers for inline comment mapping
+  const lineMap = f.chunks
+    .flatMap(chunk => chunk.changes)
+    .filter(ch => ch.type !== 'del')
+    .map(ch => ch.ln);
+
+  return {
+    path,
+    diff: diffLines.join('\n'),
+    lineMap
+  };
+});
+
+// Output JSON for PowerShell ConvertFrom-Json
 console.log(JSON.stringify(out));
