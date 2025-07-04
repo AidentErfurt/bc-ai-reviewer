@@ -498,6 +498,7 @@ closingIssuesReferences(first: 50) {
 
             # each actual diff line
             $idx = $current.diffLines.Count - 1
+            if ($line.Length -eq 0) { continue }   # skip blank lines
             switch ($line[0]) {
                 '-' {
                     $current.leftMap[$leftLn] = $idx
