@@ -471,49 +471,44 @@ closingIssuesReferences(first: 50) {
         $rightLn = 0
 
         foreach ($line in $Patch -split "`n") {
-
-            # new file diff header → start new file
             if ($line -match '^diff --git a\/.+ b\/(?<path>.+)$') {
                 if ($current) { $files += $current }
                 $current = @{
-                    path         = $Matches.path
-                    diffLines    = @()
-                    leftMap      = @{}     # old-file L# → diff index
-                    rightMap     = @{}     # new-file L# → diff index
-                    absRightMap  = @{}     # new-file absolute L# → diff index
+                    path        = $Matches.path
+                    diffLines   = @()
+                    leftMap     = @{}
+                    rightMap    = @{}
+                    absRightMap = @{}
                 }
                 $leftLn  = 0
                 $rightLn = 0
                 continue
             }
-
             if (-not $current) { continue }
 
+            # collect every diff line
             $current.diffLines += $line
 
-            # hunk header → reset line counters
+            # hunk header → reset base counts
             if ($line -match '^@@ -(?<l>\d+)(?:,\d+)? \+(?<r>\d+)(?:,\d+)? @@') {
                 $leftLn  = [int]$Matches.l
                 $rightLn = [int]$Matches.r
                 continue
             }
 
+            # each actual diff line
+            $idx = $current.diffLines.Count - 1
             switch ($line[0]) {
                 '-' {
-                    # deletion only advances left side
-                    $current.leftMap[$leftLn] = $current.diffLines.Count - 1
+                    $current.leftMap[$leftLn] = $idx
                     $leftLn++
                 }
                 '+' {
-                    # addition → record on both maps
-                    $idx = $current.diffLines.Count - 1
                     $current.rightMap[$rightLn]    = $idx
                     $current.absRightMap[$rightLn] = $idx
                     $rightLn++
                 }
                 ' ' {
-                    # context → record both sides
-                    $idx = $current.diffLines.Count - 1
                     $current.leftMap[$leftLn]      = $idx
                     $current.rightMap[$rightLn]    = $idx
                     $current.absRightMap[$rightLn] = $idx
@@ -521,22 +516,20 @@ closingIssuesReferences(first: 50) {
                 }
             }
         }
-
         if ($current) { $files += $current }
 
-        # emit objects
+        # emit enriched objects
         $files | ForEach-Object {
             [pscustomobject]@{
-                path         = $_.path
-                diff         = '```diff' + "`n" + ($_.diffLines -join "`n") + "`n````"
-                leftMap      = $_.leftMap
-                rightMap     = $_.rightMap
-                absRightMap  = $_.absRightMap
-                diffLines    = $_.diffLines
+                path        = $_.path
+                diff        = '```diff' + "`n" + ($_.diffLines -join "`n") + "`n````"
+                leftMap     = $_.leftMap
+                rightMap    = $_.rightMap
+                absRightMap = $_.absRightMap
+                diffLines   = $_.diffLines
             }
         }
     }
-
 
     ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode...
