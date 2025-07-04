@@ -137,7 +137,7 @@ runs:
 
     - name: Install diff parser
       shell: pwsh
-      run: npm install --no-save parse-diff@^1.0.0
+      run: npm install --no-save parse-diff@latest
 
     - name: Run AI Code Review
       shell: pwsh
