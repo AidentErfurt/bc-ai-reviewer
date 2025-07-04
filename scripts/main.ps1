@@ -472,15 +472,15 @@ closingIssuesReferences(first: 50) {
 
         foreach ($line in $Patch -split "`n") {
 
-            # --- diff header → start new file -----------------------------------
+            # new file diff header → start new file
             if ($line -match '^diff --git a\/.+ b\/(?<path>.+)$') {
                 if ($current) { $files += $current }
                 $current = @{
-                    path     = $Matches.path
-                    diff     = @()
-                    leftMap  = @{}   # old-file   L# → diff index
-                    rightMap = @{}   # new-file   L# → diff index
-                    diffLines = @()
+                    path         = $Matches.path
+                    diffLines    = @()
+                    leftMap      = @{}     # old-file L# → diff index
+                    rightMap     = @{}     # new-file L# → diff index
+                    absRightMap  = @{}     # new-file absolute L# → diff index
                 }
                 $leftLn  = 0
                 $rightLn = 0
@@ -489,30 +489,34 @@ closingIssuesReferences(first: 50) {
 
             if (-not $current) { continue }
 
-            $current.diff += $line
             $current.diffLines += $line
 
-            # --- hunk header -----------------------------------------------------
+            # hunk header → reset line counters
             if ($line -match '^@@ -(?<l>\d+)(?:,\d+)? \+(?<r>\d+)(?:,\d+)? @@') {
                 $leftLn  = [int]$Matches.l
                 $rightLn = [int]$Matches.r
                 continue
             }
 
-            if ($line.Length -eq 0) { continue }
-
             switch ($line[0]) {
-                '-' {                     # deletion → only LEFT moves
-                    $current.leftMap[$leftLn] = $current.diff.Count
+                '-' {
+                    # deletion only advances left side
+                    $current.leftMap[$leftLn] = $current.diffLines.Count - 1
                     $leftLn++
                 }
-                '+' {                     # addition → only RIGHT moves
-                    $current.rightMap[$rightLn] = $current.diff.Count
+                '+' {
+                    # addition → record on both maps
+                    $idx = $current.diffLines.Count - 1
+                    $current.rightMap[$rightLn]    = $idx
+                    $current.absRightMap[$rightLn] = $idx
                     $rightLn++
                 }
-                ' ' {                     # context → both sides move
-                    $current.leftMap[$leftLn]  = $current.diff.Count
-                    $current.rightMap[$rightLn] = $current.diff.Count
+                ' ' {
+                    # context → record both sides
+                    $idx = $current.diffLines.Count - 1
+                    $current.leftMap[$leftLn]      = $idx
+                    $current.rightMap[$rightLn]    = $idx
+                    $current.absRightMap[$rightLn] = $idx
                     $leftLn++; $rightLn++
                 }
             }
@@ -523,14 +527,16 @@ closingIssuesReferences(first: 50) {
         # emit objects
         $files | ForEach-Object {
             [pscustomobject]@{
-                path     = $_.path
-                diff = '```diff' + "`n" + ($_.diff -join "`n") + "`n````"
-                leftMap  = $_.leftMap
-                rightMap = $_.rightMap
-                diffLines = $_.diff
+                path         = $_.path
+                diff         = '```diff' + "`n" + ($_.diffLines -join "`n") + "`n````"
+                leftMap      = $_.leftMap
+                rightMap     = $_.rightMap
+                absRightMap  = $_.absRightMap
+                diffLines    = $_.diffLines
             }
         }
     }
+
 
     ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode…
@@ -615,6 +621,12 @@ Process {
 
     # feed the *same* patch the model will see into Parse-Patch
     $files = Parse-Patch $patch
+
+    # Build absolute‐line -> diff‐index map for quick lookup
+    $absLineMap = @{ }
+    foreach ($f in $files) {
+        $absLineMap[$f.path] = $f.absRightMap
+    }
 
     Write-Host '::group::Files in patch'
     $files.path | ForEach-Object { Write-Host $_ }
@@ -977,55 +989,53 @@ Example of an empty-but-valid result:
     # 8. Build inline comment objects (line/side only - robust anchor check)
     ########################################################################
 
-    # 8.1 Generate a minimal diff (-U3) and build a true path→file map
+    # 8.1 Generate a minimal diff (-U3) and parse it
     Write-Host 'Generating minimal diff to validate anchors (-U3)…'
-    $anchorPatch = (& git diff --unified=3 --find-renames --diff-filter=ACDMR --no-color $baseRef $headRef | Out-String)
-    $anchorFilesRaw = Parse-Patch $anchorPatch
+    $anchorPatch     = (& git diff --unified=3 --find-renames --diff-filter=ACDMR --no-color $baseRef $headRef | Out-String)
+    $anchorFilesRaw  = Parse-Patch $anchorPatch
 
-    # Build a hashtable: path -> parsed‐diff object
-    $anchorFiles = @{}
+    # Build a lookup: path → parsed‐diff object
+    $anchorFiles = @{ }
     foreach ($f in $anchorFilesRaw) {
         $anchorFiles[$f.path] = $f
     }
 
-    # 8.2 Trim AI output to $MaxComments first
+    # 8.2 Trim AI output to $MaxComments
     if ($MaxComments -gt 0 -and $review.comments.Count -gt $MaxComments) {
         Write-Host "Limiting model output from $($review.comments.Count) to $MaxComments comments"
         $review.comments = $review.comments[0..($MaxComments-1)]
     }
 
     $inline = foreach ($c in $review.comments) {
-
-        Write-Host "----"
         Write-Host "Processing proposed comment: path=$($c.path) line=$($c.line)"
 
-        # A) Find the parsed‐diff anchor for this path
-        $anchorFile = $anchorFiles[$c.path]
-        if (-not $anchorFile) {
-            Write-Host "  Skipping - file not present in minimal diff"
+        # 1) locate the abs‐map for this file
+        $map = $absLineMap[$c.path]
+        if (-not $map) {
+            Write-Host "  Skipping - file not in diff"
             continue
         }
 
-        # B) Validate & parse the line number
+        # 2) parse & validate the file‐line number
         [int]$ln = 0
         if (-not [int]::TryParse($c.line, [ref]$ln) -or $ln -le 0) {
-            Write-Host "  Skipping - invalid line number '$($c.line)'"
+            Write-Host "  Skipping - invalid line '$($c.line)'"
             continue
         }
 
-        # C) Determine side
-        $side = if ($anchorFile.rightMap.ContainsKey($ln)) { 'RIGHT' }
-                elseif ($anchorFile.leftMap.ContainsKey($ln))  { 'LEFT'  }
-                else { $null }
-
-        if (-not $side) {
-            Write-Host "  Skipping - line $ln not present in GitHub-sized diff window"
+        # 3) lookup the diff‐index
+        if (-not $map.ContainsKey($ln)) {
+            Write-Host "  Skipping - line $ln not present in diff"
             continue
         }
+        $diffIndex = $map[$ln]
 
-        Write-Host "  Will comment on $side side, line $ln"
+        # 4) determine side from your rightMap/leftMap if needed
+        $file   = $files | Where-Object path -EQ $c.path
+        $side   = $file.rightMap.ContainsKey($ln) ? 'RIGHT' : 'LEFT'
+        Write-Host "  Will comment on $side side, at diff index $diffIndex"
 
-        # D) Emit the inline comment object (no `position`)
+        # 5) emit inline object (no position)
         @{
             path = $c.path
             line = $ln
@@ -1034,13 +1044,25 @@ Example of an empty-but-valid result:
         }
     }
 
-    # 8.3 Final cap (GitHub limit = 1000)
+        Write-Host "  Will comment on $side side, line $ln"
+
+        # D) emit inline comment
+        @{
+            path = $c.path
+            line = $ln
+            side = $side
+            body = $c.comment
+        }
+    }
+
+    # 8.3 Enforce overall cap
     if ($MaxComments -gt 0 -and $inline.Count -gt $MaxComments) {
         Write-Host "Truncating inline comments: first $MaxComments of $($inline.Count)"
         $inline = $inline[0..($MaxComments-1)]
     } else {
         Write-Host "Posting $($inline.Count) inline comments"
     }
+
 
     # ########################################################################
     # # 9. Create review
