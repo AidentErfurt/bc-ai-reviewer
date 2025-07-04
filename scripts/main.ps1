@@ -539,10 +539,9 @@ Process {
 
     # Parse with **parse-diff** via NodeJS
     $scriptJs = Join-Path $PSScriptRoot 'parse-diff.js'
-    $files    = $patch | & $node $scriptJs | ConvertFrom-Json
+    $files    = $patch | node $scriptJs | ConvertFrom-Json
 
     # keep the rest of the pipeline
-    $files = (& node $tmpJs @stdin:$patch | ConvertFrom-Json)
     Write-Host '::group::git patch (raw)'
     Write-Host $patch
     Write-Host '::endgroup::'
