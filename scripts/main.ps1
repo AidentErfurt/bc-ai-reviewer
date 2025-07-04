@@ -425,7 +425,7 @@ closingIssuesReferences(first: 50) {
         body      = $review.summary
         event     = if ($ApproveReviews) { $review.suggestedAction.ToUpper() } else { 'COMMENT' }
         comments  = $inline             # ← array you already built
-        }
+        }        
         Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body $body
     }
 
@@ -465,72 +465,56 @@ closingIssuesReferences(first: 50) {
     function Parse-Patch {
         param([string]$Patch)
 
-        $files   = @()
-        $current = $null
-        $leftLn  = 0
-        $rightLn = 0
+        $files  = @()
+        $chunk  = $null
+        $leftLn = $rightLn = 0
 
-        foreach ($line in $Patch -split "`n") {
-            if ($line -match '^diff --git a\/.+ b\/(?<path>.+)$') {
-                if ($current) { $files += $current }
-                $current = @{
-                    path        = $Matches.path
+        foreach ($l in $Patch -split "`n") {
+
+            if ($l -match '^diff --git a\/.+ b\/(?<p>.+)$') {
+                if ($chunk) { $files += $chunk }
+                $chunk = @{
+                    path        = $Matches.p
                     diffLines   = @()
                     leftMap     = @{}
                     rightMap    = @{}
                     absRightMap = @{}
                 }
-                $leftLn  = 0
-                $rightLn = 0
                 continue
             }
-            if (-not $current) { continue }
 
-            # collect every diff line
-            $current.diffLines += $line
+            if (-not $chunk) { continue }
+            $chunk.diffLines += $l
+            $idx = $chunk.diffLines.Count - 1     # 0-based diff index
 
-            # hunk header → reset base counts
-            if ($line -match '^@@ -(?<l>\d+)(?:,\d+)? \+(?<r>\d+)(?:,\d+)? @@') {
+            # new hunk header -> reset bases
+            if ($l -match '^@@ -(?<l>\d+)(?:,\d+)? \+(?<r>\d+)(?:,\d+)? @@') {
                 $leftLn  = [int]$Matches.l
                 $rightLn = [int]$Matches.r
                 continue
             }
 
-            # each actual diff line
-            $idx = $current.diffLines.Count - 1
-            if ($line.Length -eq 0) { continue }   # skip blank lines
-            switch ($line[0]) {
-                '-' {
-                    $current.leftMap[$leftLn] = $idx
-                    $leftLn++
-                }
-                '+' {
-                    $current.rightMap[$rightLn]    = $idx
-                    $current.absRightMap[$rightLn] = $idx
-                    $rightLn++
-                }
-                ' ' {
-                    $current.leftMap[$leftLn]      = $idx
-                    $current.rightMap[$rightLn]    = $idx
-                    $current.absRightMap[$rightLn] = $idx
-                    $leftLn++; $rightLn++
-                }
+            if ($l.Length -eq 0) { continue }
+
+            switch ($l[0]) {
+                '-' { $chunk.leftMap[$leftLn]      = $idx; $leftLn++ }
+                '+' { $chunk.rightMap[$rightLn]    = $idx; $chunk.absRightMap[$rightLn] = $idx; $rightLn++ }
+                ' ' { $chunk.leftMap[$leftLn]      = $idx; $chunk.rightMap[$rightLn] = $idx
+                    $chunk.absRightMap[$rightLn] = $idx; $leftLn++; $rightLn++ }
             }
         }
-        if ($current) { $files += $current }
+        if ($chunk) { $files += $chunk }
 
-        # emit enriched objects
         $files | ForEach-Object {
             [pscustomobject]@{
                 path        = $_.path
-                diff        = '```diff' + "`n" + ($_.diffLines -join "`n") + "`n````"
+                diff        = "```diff`n$($_.diffLines -join "`n")`n````"
                 leftMap     = $_.leftMap
                 rightMap    = $_.rightMap
                 absRightMap = $_.absRightMap
-                diffLines   = $_.diffLines
             }
         }
-    }
+    }  
 
     ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode...
@@ -538,7 +522,6 @@ closingIssuesReferences(first: 50) {
 
     $ErrorActionPreference = 'Stop'
     Write-Host "Repository: $env:GITHUB_REPOSITORY  Provider: $Provider"
-
     if ($ApiKey)      { Write-Host "::add-mask::$ApiKey" }
     if ($AzureApiKey) { Write-Host "::add-mask::$AzureApiKey" }
 
@@ -600,7 +583,7 @@ Process {
     $baseRef = if ($lastCommit) { $lastCommit } else { $pr.base.sha }
     $headRef = $pr.head.sha
 
-    # run git diff with <DiffContextLines> lines of context
+    # run git diff with <DiffContextLines> lines of context, rename detection and no colour codes
     Write-Host "Generating diff with $DiffContextLines lines of context..."
     $patch = (& git diff --unified=$DiffContextLines --find-renames --diff-filter=ACDMR --no-color $baseRef $headRef | Out-String)
 
@@ -613,16 +596,25 @@ Process {
             "or splitting the PR." -f $byteSize, $maxBytes)
     }
 
-    # feed the *same* patch the model will see into Parse-Patch
+    # keep the rest of the pipeline
+    $files   = Parse-Patch $patch
     Write-Host '::group::git patch (raw)'
     Write-Host $patch
     Write-Host '::endgroup::'
-    $files = Parse-Patch $patch
 
-    # Build absolute‐line -> diff‐index map for quick lookup
-    $absLineMap = @{ }
+    Write-Host '::group::Raw $files'
     foreach ($f in $files) {
-        $absLineMap[$f.path] = $f.absRightMap
+        $kind  = if ($f -is [pscustomobject]) { 'PSCustomObject' } else { $f.GetType().Name }
+        $hasP  = $f -is [pscustomobject] -and $f.psobject.Properties['path']
+        $text  = if ($hasP) { $f.path } else { '<no path>' }
+        Write-Verbose ("{0,-15}  hasPath={1}  value={2}" -f $kind,$hasP,$text)
+    }
+    Write-Host '::endgroup::'
+
+    $files = @($files)               # wrap null / scalar into an array
+    if (-not $files) {               # still empty? -> nothing to review
+        Write-Host 'Patch is empty. Skipping review.'
+        return
     }
 
     Write-Host '::group::Files in patch'
@@ -802,28 +794,27 @@ Process {
 
     if (-not $DisableGuidelineDocs) {
 
-        foreach ($f in $files) {
-            $norm = Convert-PatchToCode -Patch ( $f.diffLines -join "`n" )
-            # Write-Host '::group::patch'
-            # Write-Host $norm.Text
-            # Write-Host '::endgroup::'
-            $triggers = Get-TriggeredGuidelines -Patch $norm.Text
+        # convert git diff to al code
+        $norm = Convert-PatchToCode -Patch $patch
+        # Write-Host '::group::Git diff (normalized)'
+        # Write-Host $norm.Text
+        # Write-Host '::endgroup::'
+        $triggers = Get-TriggeredGuidelines -Patch $norm.Text
 
-            foreach ($hit in $triggers) {
-                # use the mapping to translate back to the unified-diff line no
-                $diffLine = $norm.Map[$hit.Line]
-                Write-Debug ("[DEBUG] {0,-30}  L{1,-5} ⇢  '{2}'" -f `
-                            $hit.Rule, $diffLine, $hit.Snippet)
+        foreach ($hit in $triggers) {
+            # use the mapping to translate back to the unified-diff line no
+            $diffLine = $norm.Map[$hit.Line]
+            Write-Debug ("[DEBUG] {0,-30}  L{1,-5} ⇢  '{2}'" -f `
+                        $hit.Rule, $diffLine, $hit.Snippet)
 
-                $meta = $DefaultGuidelineRules[$hit.Rule]
-                if (-not $meta) { continue }
+            $meta = $DefaultGuidelineRules[$hit.Rule]
+            if (-not $meta) { continue }
 
-                $doc = Get-GuidelineDoc -RuleName $hit.Rule -Folder $meta.folder
-                if ($doc) {
-                    $ctxFiles += [pscustomobject]@{
-                        path    = "ALGuidelines/$($hit.Rule).md"
-                        content = $doc
-                    }
+            $doc = Get-GuidelineDoc -RuleName $hit.Rule -Folder $meta.folder
+            if ($doc) {
+                $ctxFiles += [pscustomobject]@{
+                    path    = "ALGuidelines/$($hit.Rule).md"
+                    content = $doc
                 }
             }
         }
@@ -898,7 +889,6 @@ $BasePromptExtra
 
 **When you answer:**
 * Provide **up to $maxInline concise inline comments** if you spot something worth improving.
-* Use the exact line number you see on either side of the hunk. If it's a removed line, the comment will go on the LEFT side.
 * If you find nothing, set `"comments": []`.
 * Keep acknowledgments short and neutral.
 * Output GitHub-flavoured Markdown inside `"comment"` fields only.
@@ -979,82 +969,57 @@ Example of an empty-but-valid result:
     Write-Host $raw
 
     # Model is nice and provides regex snippets (which break the json) -> sanitize any “\x” sequences where x != one of the valid JSON escapes
+    # Finds any single backslash that is not immediately followed by ", \, /, b, f, n, r, t or u, and doubles it.
+    # This turns \s into \\s (which JSON then interprets as the literal characters \ + s) without touching \n or \".
+    $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
+
     $review = Convert-FromAiJson -Raw $raw
     $review.summary += "`n`n------`n`n_Code review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model._"
 
     ########################################################################
-    # 8. Build inline comment objects (line/side only - robust anchor check)
+    # 8. Map inline comments & submit review
     ########################################################################
 
-    # 8.2 Trim AI output to $MaxComments
-    if ($MaxComments -gt 0 -and $review.comments.Count -gt $MaxComments) {
-        Write-Host "Limiting model output from $($review.comments.Count) to $MaxComments comments"
-        $review.comments = $review.comments[0..($MaxComments-1)]
-    }
-
+    # Build inline comment objects
     $inline = foreach ($c in $review.comments) {
-        Write-Host "Processing proposed comment: path=$($c.path) line=$($c.line)"
+        $file = $relevant | Where-Object path -eq $c.path
+        if (-not $file) { continue }
 
-        # locate the absolute‐line → diff‐index map for this file
-        $map = $absLineMap[$c.path]
-        if (-not $map) {
-            Write-Host "  Skipping - file not in diff"
-            continue
-        }
+        [int]$n = $c.line
+        $side   = $file.rightMap.ContainsKey($n) ? 'RIGHT' : ($file.leftMap.ContainsKey($n) ? 'LEFT' : $null)
+        if (-not $side) { continue }   # line not in diff -> skip
 
-        # parse & validate the file‐line number
-        [int]$ln = 0
-        if (-not [int]::TryParse($c.line, [ref]$ln) -or $ln -le 0) {
-            Write-Host "  Skipping - invalid line '$($c.line)'"
-            continue
-        }
-
-        # lookup the diff‐index
-        if (-not $map.ContainsKey($ln)) {
-            Write-Host "  Skipping - line $ln not present in diff"
-            continue
-        }
-        $diffIndex = $map[$ln]
-
-        # determine side
-        $file = $files | Where-Object path -EQ $c.path
-        $side = if ($file.rightMap.ContainsKey($ln)) { 'RIGHT' } else { 'LEFT' }
-        Write-Host "  Will comment on $side side, at diff index $diffIndex"
-
-        # emit inline object
-        @{
-            path = $c.path
-            line = $ln
-            side = $side
-            body = $c.comment
-        }
+        @{ path = $c.path
+        line = $n
+        side = $side
+        body = $c.comment }
     }
 
+    # Cap inline comments only if a positive limit is specified (0 = unlimited)
     # 8.3 Enforce overall cap
-    if ($MaxComments -gt 0 -and $inline.Count -gt $MaxComments) {
-        Write-Host "Truncating inline comments: first $MaxComments of $($inline.Count)"
-        $inline = $inline[0..($MaxComments-1)]
-    } else {
-        Write-Host "Posting $($inline.Count) inline comments"
+    if ($MaxComments -gt 0) {
+        if ($inline.Count -gt $MaxComments) {
+            Write-Host "Truncating inline comments: showing only first $MaxComments of $($inline.Count)"
+            $inline = $inline[0..($MaxComments - 1)]
+        }
+    }
+    else {
+        Write-Host "Posting all $($inline.Count) inline comments"
     }
 
-
-    # ########################################################################
-    # # 9. Create review
-    # ########################################################################
+    ########################################################################
+    # 9. Create review
+    ########################################################################
 
     try {
         # 1. create the review (summary only)
         $reviewResponse = New-Review
-        $reviewId = $reviewResponse.id
     } catch {
         Write-Warning "Submitting review failed: $_"
     }
 
     Write-Host "Review complete for PR #$prNumber"
-
-    # endregion
-}
+    }
 
 End {
     Write-Host 'Invoke-AICodeReview finished.'
