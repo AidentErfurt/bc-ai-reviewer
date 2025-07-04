@@ -974,10 +974,15 @@ Example of an empty-but-valid result:
     $review.summary += "`n`n------`n`n_Code review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model._"
 
     ########################################################################
-    # 8. Build inline comment objects (line/side only – no legacy position)
+    # 8. Build inline comment objects (line/side only - robust anchor check)
     ########################################################################
 
-    # keep at most $MaxComments, but only slice when needed
+    # 8.1 Build an *anchor map* from a minimal diff (-U3)
+    Write-Host 'Generating minimal diff to validate anchors (-U3)…'
+    $anchorPatch = (& git diff --unified=3 --find-renames --diff-filter=ACDMR --no-color $baseRef $headRef | Out-String)
+    $anchorFiles = Parse-Patch $anchorPatch | Group-Object path -AsHashTable -AsString
+
+    # 8.2 Trim AI output to $MaxComments first
     if ($MaxComments -gt 0 -and $review.comments.Count -gt $MaxComments) {
         Write-Host "Limiting model output from $($review.comments.Count) to $MaxComments comments"
         $review.comments = $review.comments[0..($MaxComments-1)]
@@ -989,87 +994,53 @@ Example of an empty-but-valid result:
         Write-Host "Processing proposed comment: path=$($c.path) line=$($c.line)"
 
         # ------------------------------------------------------------
-        # 1. Locate the file object for this path
+        # A) Locate the *anchor* file built from -U3
         # ------------------------------------------------------------
-        $file = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
-        if (-not $file) {
-            Write-Host "  Skipping -> file not in diff"
+        $anchorFile = $anchorFiles[$c.path]
+        if (-not $anchorFile) {
+            Write-Host "  Skipping - file not present in minimal diff"
             continue
         }
 
         # ------------------------------------------------------------
-        # 2. Validate & parse the line number
+        # B) Validate line number & find side
         # ------------------------------------------------------------
         [int]$ln = 0
-        if (-not [int]::TryParse($c.line, [ref]$ln) -or $ln -le 0) {
-            Write-Host "     Skipping -> invalid line number '$($c.line)'"
+        if (-not [int]::TryParse($c.line,[ref]$ln) -or $ln -le 0) {
+            Write-Host "  Skipping - invalid line number '$($c.line)'"
             continue
         }
 
-        # ------------------------------------------------------------
-        # 3. Determine which side that line belongs to
-        # ------------------------------------------------------------
-        $side = if ($file.rightMap.ContainsKey($ln)) {
-                    'RIGHT'            # new code in the PR (head)
-                }
-                elseif ($file.leftMap.ContainsKey($ln)) {
-                    'LEFT'             # removed / modified code (base)
-                }
-                else {
-                    $null
-                }
+        $side = if ($anchorFile.rightMap.ContainsKey($ln)) { 'RIGHT' }
+                elseif ($anchorFile.leftMap.ContainsKey($ln)) { 'LEFT' }
+                else { $null }
 
         if (-not $side) {
-            Write-Host "     Skipping -> line $ln not present on either side of diff"
+            Write-Host "  Skipping - line $ln not present in GitHub-sized diff window"
             continue
         }
 
-        Write-Host "     Will comment on $side side, line $ln"
+        Write-Host "  Will comment on $side side, line $ln"
 
         # ------------------------------------------------------------
-        # 4. Optional multi-line (range) support
-        # ------------------------------------------------------------
-        $rangeProps = @{}
-        if ($c.PSObject.Properties.Name -contains 'start_line') {
-
-            [int]$startLn = 0
-            if ([int]::TryParse($c.start_line, [ref]$startLn) -and $startLn -gt 0) {
-
-                $startSide = if ($file.rightMap.ContainsKey($startLn)) { 'RIGHT' }
-                            elseif ($file.leftMap.ContainsKey($startLn)) { 'LEFT' }
-                            else { $null }
-
-                if ($startSide) {
-                    $rangeProps.start_line = $startLn
-                    $rangeProps.start_side = $startSide
-                    Write-Host "      • start_line=$startLn start_side=$startSide"
-                }
-                else {
-                    Write-Host "      • Ignoring start_line $startLn -> not in diff"
-                }
-            }
-        }
-
-        # ------------------------------------------------------------
-        # 5. Emit the inline-comment object
+        # C) Emit inline object - line/side only, no position
         # ------------------------------------------------------------
         @{
-            path = $file.path
+            path = $c.path
             line = $ln
             side = $side
             body = $c.comment
-        } + $rangeProps   # merge range props only when present
+        }
     }
 
-    # ------------------------------------------------------------
-    # 9. Enforce overall MaxComments (GitHub hard limit = 1000)
-    # ------------------------------------------------------------
+    # 8.3 Final cap enforced again (GitHub limit = 1000)
     if ($MaxComments -gt 0 -and $inline.Count -gt $MaxComments) {
         Write-Host "Truncating inline comments: first $MaxComments of $($inline.Count)"
-        $inline = $inline[0..($MaxComments - 1)]
+        $inline = $inline[0..($MaxComments-1)]
     } else {
         Write-Host "Posting $($inline.Count) inline comments"
     }
+
 
     # ########################################################################
     # # 9. Create review
@@ -1080,7 +1051,7 @@ Example of an empty-but-valid result:
         $reviewResponse = New-Review
         $reviewId = $reviewResponse.id
     } catch {
-        Write-Warning "Submitting inline comments failed: $_  - falling back to summary-only"
+        Write-Warning "Submitting review failed: $_"
     }
 
     Write-Host "Review complete for PR #$prNumber"
