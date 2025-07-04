@@ -614,6 +614,9 @@ Process {
     }
 
     # feed the *same* patch the model will see into Parse-Patch
+    Write-Host '::group::git patch (raw)'
+    Write-Host $patch
+    Write-Host '::endgroup::'
     $files = Parse-Patch $patch
 
     # Build absolute‐line -> diff‐index map for quick lookup
@@ -801,9 +804,9 @@ Process {
 
         foreach ($f in $files) {
             $norm = Convert-PatchToCode -Patch ( $f.diffLines -join "`n" )
-            Write-Host '::group::patch'
-            Write-Host $norm.Text
-            Write-Host '::endgroup::'
+            # Write-Host '::group::patch'
+            # Write-Host $norm.Text
+            # Write-Host '::endgroup::'
             $triggers = Get-TriggeredGuidelines -Patch $norm.Text
 
             foreach ($hit in $triggers) {
