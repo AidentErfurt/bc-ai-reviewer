@@ -985,14 +985,15 @@ Example of an empty-but-valid result:
         $file = $relevant | Where-Object path -eq $c.path
         if (-not $file) { continue }
 
-        [int]$n = $c.line
-        $side   = $file.rightMap.ContainsKey($n) ? 'RIGHT' : ($file.leftMap.ContainsKey($n) ? 'LEFT' : $null)
-        if (-not $side) { continue }   # line not in diff -> skip
+        [int]$n       = $c.line
+        $hasPosition  = $file.absRightMap.ContainsKey($n)
+        if (-not $hasPosition) { continue }   # must be a line that exists in the patch
 
-        @{ path = $c.path
-        line = $n
-        side = $side
-        body = $c.comment }
+        [pscustomobject]@{
+            path      = $c.path
+            position  = $file.absRightMap[$n]   # 0-based index in unified diff
+            body      = $c.comment
+        }
     }
 
     # Cap inline comments only if a positive limit is specified (0 = unlimited)
