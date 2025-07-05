@@ -1,34 +1,38 @@
 // scripts/parse-diff.js
-
 import { readFileSync } from 'fs';
 import parseDiff from 'parse-diff';
+
 
 // Read the full unified diff from stdin (fd 0)
 const diff = readFileSync(0, 'utf8');
 const files = parseDiff(diff);
 
 // Normalize and emit each file's path, diff text, and lineMap for PowerShell
-const out = files.map(f => {
-  const path = f.to === '/dev/null' ? null : f.to;
+const result = files.map(f => {
+  // Pick whichever side isnt /dev/null
+  const path = (f.to !== '/dev/null' ? f.to : f.from).replace(/^b\//,'').replace(/^a\//,'');
 
-  // Construct the unified diff snippet for this file
-  const diffLines = f.chunks.flatMap(chunk => [
-    chunk.content,                  // the "@@ -a,b +c,d @@" header
-    ...chunk.changes.map(ch => ch.content) // each line with its +/‑/space prefix
-  ]);
+  let pos     = 0;            // 1-based position inside the patch
+  const map   = {};           // new-file line  ->  position
+  const lines = [];           // full patch text for debugging
 
-  // Build an array of new-file line numbers for inline comment mapping
-  const lineMap = f.chunks
-    .flatMap(chunk => chunk.changes)
-    .filter(ch => ch.type !== 'del')
-    .map(ch => ch.ln);
+  f.chunks.forEach(chunk => {
+    // hunk header counts as 1 position
+    lines.push(chunk.content);
+    pos++;
 
-  return {
-    path,
-    diff: diffLines.join('\n'),
-    lineMap
-  };
+    chunk.changes.forEach(ch => {
+      lines.push(ch.content);
+      pos++;
+
+      // GitHub only accepts comments on lines that exist in the “after” file
+      if (ch.type !== 'del' && ch.ln !== undefined) {
+        map[ch.ln] = pos;     // ln = line number in the new file
+      }
+    });
+  });
+
+  return { path, diff: lines.join('\n'), lineMap: map };
 });
 
-// Output JSON for PowerShell ConvertFrom-Json
-console.log(JSON.stringify(out));
+console.log(JSON.stringify(result));

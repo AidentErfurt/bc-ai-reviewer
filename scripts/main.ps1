@@ -416,16 +416,15 @@ closingIssuesReferences(first: 50) {
     #########################################################
     
     function New-Review {
-        # guardrail for huge summaries
         if ($review.summary.Length -gt 65000) {
             $review.summary = $review.summary.Substring(0,65000) + "`n...(truncated)"
         }
         $body = @{
-            commit_id = $pr.head.sha
+            commit_id = $pr.head.sha          # optional but nice to be explicit
             body      = $review.summary
             event     = if ($ApproveReviews) { $review.suggestedAction.ToUpper() } else { 'COMMENT' }
-            comments  = $inline
-        }        
+            comments  = $inline               # array from step 3.2
+        }
         Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body $body
     }
 
@@ -505,18 +504,41 @@ Process {
     # 2. Determine last reviewed commit (if any)
     ############################################################################
     $reviews = Invoke-GitHub -Path "/repos/$owner/$repo/pulls/$prNumber/reviews"
-    $lastBot = $reviews |
-        Where-Object { $_.user.login -eq 'github-actions[bot]' } |
-        Sort-Object submitted_at -Descending |
-        Select-Object -First 1
 
-    $lastCommit = $null
-    if ($lastBot) {
-        $commits  = Invoke-GitHub -Path "/repos/$owner/$repo/pulls/$prNumber/commits"
-        $revDate  = [datetime]$lastBot.submitted_at
-        $lastCommit = ($commits |
-            Where-Object { [datetime]$_.commit.committer.date -le $revDate } |
-            Select-Object -Last 1).sha
+    # Look for the most recent review by the bot that contains our marker
+    $markerRx  = [regex]'<!--\s*ai-sha:(?<sha>[0-9a-f]{7,40})\s*-->'
+    $lastSha   = $null
+    $reviewHit = $null
+
+    foreach ($rev in ($reviews | Sort-Object submitted_at -Descending)) {
+        if ($rev.user.login -ne 'github-actions[bot]') { continue }
+        $m = $markerRx.Match($rev.body)
+        if ($m.Success) {
+            $lastSha   = $m.Groups['sha'].Value
+            $reviewHit = $rev
+            break
+        }
+    }
+
+    if ($lastSha) {
+        Write-Host "Found previous AI review marker: $lastSha"
+        $lastCommit = $lastSha
+    }
+    else {
+        # fall back to the timestamp method
+        $lastBot = $reviews |
+            Where-Object { $_.user.login -eq 'github-actions[bot]' } |
+            Sort-Object submitted_at -Descending |
+            Select-Object -First 1
+
+        $lastCommit = $null
+        if ($lastBot) {
+            $commits  = Invoke-GitHub -Path "/repos/$owner/$repo/pulls/$prNumber/commits"
+            $revDate  = [datetime]$lastBot.submitted_at
+            $lastCommit = ($commits |
+                Where-Object { [datetime]$_.commit.committer.date -le $revDate } |
+                Select-Object -Last 1).sha
+        }
     }
 
     ############################################################################
@@ -540,6 +562,13 @@ Process {
     # Parse with **parse-diff** via NodeJS
     $scriptJs = Join-Path $PSScriptRoot 'parse-diff.js'
     $files    = $patch | node $scriptJs | ConvertFrom-Json
+    
+    # turn empty/null into an array so the rest of the pipeline is safe
+    $files    = @($files)
+    if (-not $files.Count) {
+        Write-Host 'Patch is empty. Skipping review.'
+        return
+    }
 
     # keep the rest of the pipeline
     Write-Host '::group::git patch (raw)'
@@ -918,7 +947,9 @@ Example of an empty-but-valid result:
     $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
 
     $review = Convert-FromAiJson -Raw $raw
-    $review.summary += "`n`n------`n`n_Code review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model._"
+    $review.summary += "`n`n------`n`n_Code review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model._"`
+    
+    $review.summary += "`n<!-- ai-sha:$headRef -->"
 
     ########################################################################
     # 8. Map inline comments & submit review
@@ -926,17 +957,17 @@ Example of an empty-but-valid result:
 
     # Build inline comment objects
     $inline = foreach ($c in $review.comments) {
-        $file = $relevant | Where-Object path -eq $c.path
-        if (-not $file) { continue }
 
-        $lineNo = [int]$c.line
-        if ($lineNo -lt 1 -or $lineNo -gt $file.lineMap.Count) { continue }
+        $file = $files | Where-Object { $_.path -eq $c.path }
+        if (-not $file) { continue }          # file not in diff
+
+        $pos = $file.lineMap[[int]$c.line]    # translate new-file line -> position
+        if (-not $pos)  { continue }          # unknown line -> skip
 
         [pscustomobject]@{
-            path = $c.path
-            line = [int]$c.line      # use the real file line number
-            body = $c.comment
-            side = 'RIGHT'
+            path     = $c.path
+            position = $pos
+            body     = $c.comment    # markdown already escaped by the model
         }
     }
 
@@ -959,6 +990,8 @@ Example of an empty-but-valid result:
     try {
         # 1. create the review (summary only)
         $reviewResponse = New-Review
+        $url = $reviewResponse.html_url
+        Write-Host "Review posted: $url"
     } catch {
         Write-Warning "Submitting review failed: $_"
     }
