@@ -970,9 +970,6 @@ Example of an empty-but-valid result:
         $file = $files | Where-Object { $_.path -eq $c.path }
         if (-not $file) { continue }          # file not in diff
 
-        # $pos = $file.lineMap."$($c.line)"     # translate new-file line -> position
-        # if (-not $pos)  { continue }          # unknown line -> skip
-
         [pscustomobject]@{
             path     = $c.path
             line     = [int]$c.line            # new-file line directly
