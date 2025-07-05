@@ -437,21 +437,14 @@ closingIssuesReferences(first: 50) {
             [int]$MaxAttempts = 5
         )
 
+        $badBackslash = [regex]'(?<!\\)\\(?![\\/"bfnrtu]|u[0-9a-fA-F]{4})'
         $json = $Raw
 
         for ($try = 1; $try -le $MaxAttempts; $try++) {
             try { return $json | ConvertFrom-Json }
             catch {
-                if ($_.Exception.Message -notmatch 'Bad JSON escape sequence: \\(.)') { throw }
-
-                # Grab the offending character the parser complains about
-                $badChar = $Matches[1]
-
-                # Back-slash not already doubled AND not followed by ["\/bfnrtu]
-                $pat = '(?<!\\)\\(?![\\/"bfnrtu])'
-                $json = [regex]::Replace($json, $pat, '\\$&')
-
-                Write-Verbose ("Retry #{0} - escaped `\{1}``" -f $try, $badChar)
+                $json = $badBackslash.Replace($json,'\\$&')
+                Write-Verbose "Retry #$try – escaped stray back-slash"
             }
         }
 
@@ -556,7 +549,7 @@ Process {
     $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
     $maxBytes = 500KB
     if ($byteSize -gt $maxBytes) {
-        throw "The generated diff is $($byteSize) bytes (> $maxBytes). Consider reducing the scope."
+        throw "The generated diff is $($byteSize) bytes (> $maxBytes). Conside using INCLUDE_PATTERNS/EXCLUDE_PATTERNS."
     }
 
     # Parse with **parse-diff** via NodeJS
@@ -947,7 +940,7 @@ Example of an empty-but-valid result:
     $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
 
     $review = Convert-FromAiJson -Raw $raw
-    $review.summary += "`n`n------`n`n_Code review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model._"`
+    $review.summary += "`n`n------`n`n_Code review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model."`
     
     $review.summary += "`n<!-- ai-sha:$headRef -->"
 
