@@ -2,18 +2,26 @@
 import { readFileSync } from 'fs';
 import parseDiff from 'parse-diff';
 
-// Read the full unified diff from stdin (fd 0)
-const diff = readFileSync(0, 'utf8');
-const files = parseDiff(diff);
+// Read the full unified diff from stdin
+const rawDiff = readFileSync(0, 'utf8');
+const files = parseDiff(rawDiff);
 
-// Emit only the file path and full diff text
 const result = files.map(f => {
+  // Determine the "after" path (or "before" if deleted)
   const path = (f.to !== '/dev/null' ? f.to : f.from)
-                 .replace(/^b\//, '')
-                 .replace(/^a\//, '');
+    .replace(/^b\//, '')
+    .replace(/^a\//, '');
+
+  // Reconstruct each hunk: header + its changed lines
+  const hunks = f.chunks.map(chunk => {
+    const header = chunk.content; // the "@@ -.. +.. @@" line
+    const lines = chunk.changes.map(c => c.content).join('\n');
+    return [header, lines].filter(Boolean).join('\n');
+  }).join('\n');
+
   return {
     path,
-    diff: f.diff
+    diff: hunks
   };
 });
 
