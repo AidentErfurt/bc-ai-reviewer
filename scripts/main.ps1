@@ -571,6 +571,27 @@ Process {
     # Parse with **parse-diff** via NodeJS
     $scriptJs = Join-Path $PSScriptRoot 'parse-diff.js'
     $files    = $patch | node $scriptJs | ConvertFrom-Json
+    Write-Host '::group::File -> Chunk -> Change'
+    foreach ($f in $files) {
+        Write-Host "`nFILE: $($f.path)"
+        foreach ($chunk in $f.chunks) {
+            # first ~40 chars of the @@ header
+            Write-Host "  CHUNK: $($chunk.content.Trim())"
+            foreach ($chg in $chunk.changes) {
+                $marker = switch ($chg.type) {
+                    'add' { '+' }
+                    'del' { '-' }
+                    default { ' ' }   # context
+                }
+                # ln  = line on the NEW side (add/context)
+                # ln2 = line on the OLD side (del/context)
+                "{0,8}{1,8} {2} {3}" -f `
+                    ($chg.ln2 ?? ''), ($chg.ln ?? ''), $marker, $chg.content |
+                    Write-Host
+            }
+        }
+    }
+    Write-Host '::endgroup::'
     
     # turn empty/null into an array so the rest of the pipeline is safe
     $files    = @($files)
@@ -976,6 +997,7 @@ Example of an empty-but-valid result:
             side     = 'RIGHT'                 # always comment on the "after" side
             body     = $c.comment              # markdown already escaped by the model
         }
+        Write-Host "Create inline comment: path=$($c.path) line=$($c.line) body=$($c.comment)"
     }
 
     # Cap inline comments only if a positive limit is specified (0 = unlimited)
