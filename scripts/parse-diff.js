@@ -6,6 +6,8 @@ import parseDiff from 'parse-diff';
 // Read the full unified diff from stdin (fd 0)
 const diff = readFileSync(0, 'utf8');
 const files = parseDiff(diff);
+const headerLines = [`--- a/${path}`, `+++ b/${path}`];
+headerLines.forEach(l => { lines.push(l); pos++; });
 
 // Normalize and emit each file's path, diff text, and lineMap for PowerShell
 const result = files.map(f => {

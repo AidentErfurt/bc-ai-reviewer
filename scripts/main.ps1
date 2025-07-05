@@ -970,13 +970,14 @@ Example of an empty-but-valid result:
         $file = $files | Where-Object { $_.path -eq $c.path }
         if (-not $file) { continue }          # file not in diff
 
-        $pos = $file.lineMap."$($c.line)"    # translate new-file line -> position
-        if (-not $pos)  { continue }          # unknown line -> skip
+        # $pos = $file.lineMap."$($c.line)"     # translate new-file line -> position
+        # if (-not $pos)  { continue }          # unknown line -> skip
 
         [pscustomobject]@{
             path     = $c.path
-            position = $pos
-            body     = $c.comment    # markdown already escaped by the model
+            line     = [int]$c.line            # new-file line directly
+            side     = 'RIGHT'                 # always comment on the "after" side
+            body     = $c.comment              # markdown already escaped by the model
         }
     }
 
