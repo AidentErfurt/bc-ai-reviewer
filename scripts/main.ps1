@@ -572,25 +572,32 @@ Process {
     $scriptJs = Join-Path $PSScriptRoot 'parse-diff.js'
     $files    = $patch | node $scriptJs | ConvertFrom-Json
     Write-Host '::group::File -> Chunk -> Change'
-    foreach ($f in $files) {
-        Write-Host "`nFILE: $($f.path)"
-        foreach ($chunk in $f.chunks) {
-            # first ~40 chars of the @@ header
-            Write-Host "  CHUNK: $($chunk.content.Trim())"
-            foreach ($chg in $chunk.changes) {
-                $marker = switch ($chg.type) {
-                    'add' { '+' }
-                    'del' { '-' }
-                    default { ' ' }   # context
-                }
-                # ln  = line on the NEW side (add/context)
-                # ln2 = line on the OLD side (del/context)
-                "{0,8}{1,8} {2} {3}" -f `
-                    ($chg.ln2 ?? ''), ($chg.ln ?? ''), $marker, $chg.content |
+    for ($i=0; $i -lt $files.Count; $i++) {
+        $f = $files[$i]
+        # Show what properties each file object really has
+        Write-Host "`n[File #$i] Props: $($f.psobject.Properties.Name -join ', ')"
+        # Show the raw JSON so you can see shape & names
+        Write-Host ($f | ConvertTo-Json -Depth 4)
+        
+        # If it really has a “chunks” array, walk it
+        if ($f.PSObject.Properties.Name -contains 'chunks') {
+            foreach ($chunk in $f.chunks) {
+                # print the hunk header or first 60 chars of the diff block
+                $hdr = ($chunk.content ?? $chunk.header) -as [string]
+                Write-Host "  CHUNK: $($hdr.Trim().Substring(0,[math]::Min(60,$hdr.Length)))"
+                foreach ($chg in $chunk.changes) {
+                    $mark = switch ($chg.type) { 'add' {'+'} 'del' {'-'} default {' '} }
+                    # Show old-line/new-line markers + content
+                    "{0,6} {1,6} {2} {3}" -f ($chg.ln2 -or ''), ($chg.ln -or ''), $mark, $chg.content |
                     Write-Host
+                }
             }
         }
+        else {
+            Write-Host "  → no chunks on this object, so nothing to walk"
+        }
     }
+
     Write-Host '::endgroup::'
     
     # turn empty/null into an array so the rest of the pipeline is safe
