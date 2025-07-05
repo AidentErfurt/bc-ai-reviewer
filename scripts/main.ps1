@@ -571,34 +571,34 @@ Process {
     # Parse with **parse-diff** via NodeJS
     $scriptJs = Join-Path $PSScriptRoot 'parse-diff.js'
     $files    = $patch | node $scriptJs | ConvertFrom-Json
-    Write-Host '::group::File -> Chunk -> Change'
-    for ($i=0; $i -lt $files.Count; $i++) {
-        $f = $files[$i]
-        # Show what properties each file object really has
-        Write-Host "`n[File #$i] Props: $($f.psobject.Properties.Name -join ', ')"
-        # Show the raw JSON so you can see shape & names
-        Write-Host ($f | ConvertTo-Json -Depth 4)
+    # Write-Host '::group::File -> Chunk -> Change'
+    # for ($i=0; $i -lt $files.Count; $i++) {
+    #     $f = $files[$i]
+    #     # Show what properties each file object really has
+    #     Write-Host "`n[File #$i] Props: $($f.psobject.Properties.Name -join ', ')"
+    #     # Show the raw JSON so you can see shape & names
+    #     Write-Host ($f | ConvertTo-Json -Depth 4)
         
-        # If it really has a “chunks” array, walk it
-        if ($f.PSObject.Properties.Name -contains 'chunks') {
-            foreach ($chunk in $f.chunks) {
-                # print the hunk header or first 60 chars of the diff block
-                $hdr = ($chunk.content ?? $chunk.header) -as [string]
-                Write-Host "  CHUNK: $($hdr.Trim().Substring(0,[math]::Min(60,$hdr.Length)))"
-                foreach ($chg in $chunk.changes) {
-                    $mark = switch ($chg.type) { 'add' {'+'} 'del' {'-'} default {' '} }
-                    # Show old-line/new-line markers + content
-                    "{0,6} {1,6} {2} {3}" -f ($chg.ln2 -or ''), ($chg.ln1 -or ''), $mark, $chg.content |
-                    Write-Host
-                }
-            }
-        }
-        else {
-            Write-Host "  → no chunks on this object, so nothing to walk"
-        }
-    }
+    #     # If it really has a “chunks” array, walk it
+    #     if ($f.PSObject.Properties.Name -contains 'chunks') {
+    #         foreach ($chunk in $f.chunks) {
+    #             # print the hunk header or first 60 chars of the diff block
+    #             $hdr = ($chunk.content ?? $chunk.header) -as [string]
+    #             Write-Host "  CHUNK: $($hdr.Trim().Substring(0,[math]::Min(60,$hdr.Length)))"
+    #             foreach ($chg in $chunk.changes) {
+    #                 $mark = switch ($chg.type) { 'add' {'+'} 'del' {'-'} default {' '} }
+    #                 # Show old-line/new-line markers + content
+    #                 "{0,6} {1,6} {2} {3}" -f ($chg.ln2 -or ''), ($chg.ln1 -or ''), $mark, $chg.content |
+    #                 Write-Host
+    #             }
+    #         }
+    #     }
+    #     else {
+    #         Write-Host "  → no chunks on this object, so nothing to walk"
+    #     }
+    # }
 
-    Write-Host '::endgroup::'
+    # Write-Host '::endgroup::'
     
     # turn empty/null into an array so the rest of the pipeline is safe
     $files    = @($files)
@@ -902,7 +902,21 @@ $BasePromptExtra
 * If you find nothing, set `"comments": []`.
 * Keep acknowledgments short and neutral.
 * Output GitHub-flavoured Markdown inside `"comment"` fields only.
-* Return **valid JSON**. Inside "comment" fields you may use Markdown but MUST escape every \ as \\\\.
+* You must output **only** a single JSON object (no surrounding text).  
+  All JSON strings must be properly escaped so that they parse without error.  
+  Inside any "comment" fields you may include Markdown syntax, but:
+
+    1. **Every** backslash (`\`) must be written as `\\\\` (four literal backslashes).  
+    2. Any quotation mark inside a string must be escaped as `\"`.  
+    3. Do **not** emit any unescaped Markdown characters or raw backslashes.
+
+    Example of a correctly-escaped comment entry:
+
+    {
+    "path": "scripts/main.ps1",
+    "line": 235,
+    "comment": "In Convert-FromAiJson, the cleaning of \\\\\\\\$Raw into \\\\\\\\$json is undone by resetting \\\\\\\\$json = \\\\\\\\$Raw. Use \\\\\\\\$json consistently..."
+    }
 
 Focus exclusively on the code: naming, performance, events/trigger usage, filters,
 record locking, permission/entitlement changes, UI strings (tone & BC terminology).
