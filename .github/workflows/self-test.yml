@@ -29,7 +29,7 @@ jobs:
           AZURE_API_VERSION:  '2025-01-01-preview'
           AI_MODEL:            o3-mini
           MAX_COMMENTS:        10
-          DIFF_CONTEXT_LINES:  25
+          DIFF_CONTEXT_LINES:  3
           APPROVE_REVIEWS:     false
 
           # --- tailor the prompt & context ---
