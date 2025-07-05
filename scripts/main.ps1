@@ -910,14 +910,6 @@ $BasePromptExtra
     2. Any quotation mark inside a string must be escaped as `\"`.  
     3. Do **not** emit any unescaped Markdown characters or raw backslashes.
 
-    Example of a correctly-escaped comment entry:
-
-    {
-    "path": "scripts/main.ps1",
-    "line": 235,
-    "comment": "In Convert-FromAiJson, the cleaning of \\\\\\\\$Raw into \\\\\\\\$json is undone by resetting \\\\\\\\$json = \\\\\\\\$Raw. Use \\\\\\\\$json consistently..."
-    }
-
 Focus exclusively on the code: naming, performance, events/trigger usage, filters,
 record locking, permission/entitlement changes, UI strings (tone & BC terminology).
 
