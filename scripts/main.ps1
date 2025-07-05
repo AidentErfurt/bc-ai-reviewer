@@ -1,14 +1,14 @@
 <#
 Copyright 2025 Aident GmbH
 
-Licensed under the Apache License, Version 2.0 (the “License”);
+Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an “AS IS” BASIS,
+distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
@@ -155,6 +155,8 @@ function Invoke-AICodeReview {
 
 Begin {
 
+    Set-StrictMode -Version Latest
+
     ############################################################################
     # Helpers
     ############################################################################
@@ -229,81 +231,6 @@ Begin {
         } catch {
             Write-Error "GitHub API call failed ($Method $Path): $_"
             throw
-        }
-    }
-
-    ############################################################################
-    # Helper: Parse a unified diff into file objects for review
-    ############################################################################
-    function Parse-Patch {
-        param([string]$patch)
-
-        $files   = @()
-        $current = $null
-
-        foreach ($line in $patch -split "`n") {
-
-            # diff-header 
-            if ($line -match '^diff\s--git\s+a\/.+\s+b\/(?<path>.+)$') {
-
-                # Push previous chunk if it contained any diff lines
-                if ($current -and $current.path -and $current.diffLines.Count) {
-                    $files += $current
-                }
-
-                # Start new chunk
-                $current = [ordered]@{
-                    path      = $Matches.path
-                    diffLines = @()
-                    mappings  = @()
-                }
-                $newLine = 0
-                continue
-            }
-
-            # No active chunk yet -> skip
-            if (-not $current) { continue }
-
-            # collect diff text
-            $current.diffLines += $line
-
-            # Track the “+<new>,<count>” header             (@@ -12,7 +15,8 @@)
-            if ($line -match '^@@ -\d+(?:,\d+)? \+(?<new>\d+)(?:,(?<cnt>\d+))? @@') {
-                $newLine = [int]$Matches.new
-                continue
-            }
-
-            # Only the three real diff line types count towards GitHub's line numbers
-            if (-not $line) { continue }
-
-            switch ($line[0]) {
-                '+' {              # insertion
-                    $current.mappings += $newLine
-                    $newLine++
-                }
-                ' ' {              # unchanged / context
-                    $current.mappings += $newLine
-                    $newLine++
-                }
-                '-' {              # deletion – $newLine stays unchanged
-                }
-                default {          # everything else (\, file headers, blank, etc.)
-                }
-            }
-        }
-
-        # Tail-piece
-        if ($current -and $current.path -and $current.diffLines.Count) {
-            $files += $current
-        }
-
-        # Return simple objects for the AI prompt
-        foreach ($f in $files) {
-            [pscustomobject]@{
-                path    = $f.path
-                diff    = "```diff`n$($f.diffLines -join "`n")`n````"
-                lineMap = $f.mappings
-            }
         }
     }
 
@@ -431,7 +358,7 @@ closingIssuesReferences(first: 50) {
                     $line = ([regex]::Matches($Patch.Substring(0, $m.Index), "`n")).Count + 1
 
                     $snippet = $m.Value.Replace("`r",' ').Replace("`n",' ')
-                    if ($snippet.Length -gt $MaxLen) { $snippet = $snippet.Substring(0,$MaxLen) + '…' }
+                    if ($snippet.Length -gt $MaxLen) { $snippet = $snippet.Substring(0,$MaxLen) + '...' }
 
                     $hits += [pscustomobject]@{
                         Rule    = $ruleName
@@ -484,62 +411,59 @@ closingIssuesReferences(first: 50) {
         return $null
     }
     
-    ############################################################################
-    # Helper: Map inline comments & submit review
-    ############################################################################
-    
-    function Submit-Review { param($comments)
-
-        # ensure comments is always an array
-        $comments = @($comments)
-
-        Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body @{
-            body     = $review.summary
-            comments = $comments
-            event    = if ($ApproveReviews) { $review.suggestedAction.ToUpper() } else { 'COMMENT' }
-        }
-    }
-
     #########################################################
-    # Helper to create the *summary* review only
+    # Helper: to create the *summary* review only
     #########################################################
     
     function New-Review {
-        # guardrail for huge summaries
         if ($review.summary.Length -gt 65000) {
-            $review.summary = $review.summary.Substring(0,65000) + "`n…(truncated)"
+            $review.summary = $review.summary.Substring(0,65000) + "`n...(truncated)"
         }
-        $body = @{ body = $review.summary }
-        $body.event = if ($ApproveReviews) { $review.suggestedAction.ToUpper() } else { 'COMMENT' }
+        $body = @{
+            commit_id = $pr.head.sha          # optional but nice to be explicit
+            body      = $review.summary
+            event     = if ($ApproveReviews) { $review.suggestedAction.ToUpper() } else { 'COMMENT' }
+            comments  = $inline               # array from step 3.2
+        }
         Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body $body
     }
 
-    #########################################################
-    # Helper to add a single inline comment to the review
-    #########################################################
-    
-    function Add-ReviewComment {
-    param(
-        [string]$ReviewId,
-        [hashtable]$Comment
-    )
-        # Use the Pull Request Comments endpoint for inline comments (GitHub REST)
-        Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/comments" -Body @{
-            body      = $Comment.body
-            commit_id = $pr.head.sha
-            path      = $Comment.path
-            side      = $Comment.side
-            line      = $Comment.line
+    #######################################################################
+    # Helper: turns the raw model string into a PowerShell object #
+    #######################################################################
+    function Convert-FromAiJson {
+        param(
+            [Parameter(Mandatory)][string]$Raw,
+            [int]$MaxAttempts = 5
+        )
+
+        # 1) kill BOM / zero-width space and control chars that JSON cannot swallow
+        $json = $Raw.TrimStart([char]0xFEFF, [char]0x200B)
+        $json = $json -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
+
+        # escape single back-slashes that aren't part of a legal sequence
+        $badBackslash = [regex]'(?<!\\)\\(?![\\/"bfnrtu]|u[0-9a-fA-F]{4})'
+        $json = $Raw
+
+        for ($try = 1; $try -le $MaxAttempts; $try++) {
+            try { return $json | ConvertFrom-Json }
+            catch {
+                $json = $badBackslash.Replace($json,'\\$&')
+                Write-Verbose "Retry #$try - escaped stray back-slash or cleaned control chars"
+            }
         }
+
+        throw "Failed to sanitise AI response after $MaxAttempts attempts."
     }
 
     ############################################################################
-    # Begin block: parameter validation, splitting globs, strict mode…
+    # Begin block: parameter validation, splitting globs, strict mode...
     ############################################################################
 
-    Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
     Write-Host "Repository: $env:GITHUB_REPOSITORY  Provider: $Provider"
+    if ($ApiKey)      { Write-Host "::add-mask::$ApiKey" }
+    if ($AzureApiKey) { Write-Host "::add-mask::$AzureApiKey" }
 
     # Runtime-guard in case empty strings were passed
     if ($Provider -in @('openai','openrouter') -and [string]::IsNullOrWhiteSpace($ApiKey)) {
@@ -578,43 +502,115 @@ Process {
     # 2. Determine last reviewed commit (if any)
     ############################################################################
     $reviews = Invoke-GitHub -Path "/repos/$owner/$repo/pulls/$prNumber/reviews"
-    $lastBot = $reviews |
-        Where-Object { $_.user.login -eq 'github-actions[bot]' } |
-        Sort-Object submitted_at -Descending |
-        Select-Object -First 1
 
-    $lastCommit = $null
-    if ($lastBot) {
-        $commits  = Invoke-GitHub -Path "/repos/$owner/$repo/pulls/$prNumber/commits"
-        $revDate  = [datetime]$lastBot.submitted_at
-        $lastCommit = ($commits |
-            Where-Object { [datetime]$_.commit.committer.date -le $revDate } |
-            Select-Object -Last 1).sha
+    # Look for the most recent review by the bot that contains our marker
+    $markerRx  = [regex]'<!--\s*ai-sha:(?<sha>[0-9a-f]{7,40})\s*-->'
+    $lastSha   = $null
+    $reviewHit = $null
+
+    foreach ($rev in ($reviews | Sort-Object submitted_at -Descending)) {
+        if ($rev.user.login -ne 'github-actions[bot]') { continue }
+        $m = $markerRx.Match($rev.body)
+        if ($m.Success) {
+            $lastSha   = $m.Groups['sha'].Value
+            $reviewHit = $rev
+            break
+        }
+    }
+
+    if ($lastSha) {
+        Write-Host "Last-commit selection: marker-based (found <!-- ai-sha:$lastSha --> in review)"
+        $lastCommit = $lastSha
+    }
+    else {
+        # fall back to the timestamp method
+        $lastBot = $reviews |
+            Where-Object { $_.user.login -eq 'github-actions[bot]' } |
+            Sort-Object submitted_at -Descending |
+            Select-Object -First 1
+
+        $lastCommit = $null
+        if ($lastBot) {
+            $commits  = Invoke-GitHub -Path "/repos/$owner/$repo/pulls/$prNumber/commits"
+            $revDate  = [datetime]$lastBot.submitted_at
+            $lastCommit = ($commits |
+                Where-Object { [datetime]$_.commit.committer.date -le $revDate } |
+                Select-Object -Last 1).sha
+            Write-Host "Last-commit selection: timestamp-based (fallback to latest bot review)"
+        }
     }
 
     ############################################################################
-    # 3. Fetch & parse diff
+    # 3. Fetch & parse diff   (incremental)
     ############################################################################
     # decide which commits to diff
     $baseRef = if ($lastCommit) { $lastCommit } else { $pr.base.sha }
     $headRef = $pr.head.sha
 
-    # run git diff with x lines of context, rename detection and no colour codes
+    # Fetch the commit message for BaseRef (first line only)
+    try {
+        $commitInfo = Invoke-GitHub -Path "/repos/$owner/$repo/commits/$baseRef"
+        $msgLine = $commitInfo.commit.message.Split("`n")[0]
+        Write-Host "lastCommit Commit message:      $msgLine"
+    }
+    catch {
+        Write-Warning "Could not fetch commit message for $($baseRef): $_"
+    }
+
+    # run git diff with <DiffContextLines> lines of context, rename detection and no colour codes
     Write-Host "Generating diff with $DiffContextLines lines of context..."
-    $patch = (& git diff --unified=$DiffContextLines --find-renames --no-color $baseRef $headRef | Out-String)
+    $patch = (& git diff --unified=$DiffContextLines --find-renames --diff-filter=ACDMR --no-color $baseRef $headRef | Out-String)
 
-    # Guardrail: abort if the diff is ridiculously large
+    # Guard‑rail first → abort early if diff is huge
     $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
-    $maxBytes = 500KB      # tweak here if needed
-
+    $maxBytes = 500KB
     if ($byteSize -gt $maxBytes) {
-        throw ("The generated diff is {0:N0} bytes (> {1:N0}). " +
-            "Consider tightening INCLUDE_PATTERNS / EXCLUDE_PATTERNS " +
-            "or splitting the PR." -f $byteSize, $maxBytes)
+        throw "The generated diff is $($byteSize) bytes (> $maxBytes). Conside using INCLUDE_PATTERNS/EXCLUDE_PATTERNS."
+    }
+
+    # Parse with **parse-diff** via NodeJS
+    $scriptJs = Join-Path $PSScriptRoot 'parse-diff.js'
+    $files    = $patch | node $scriptJs | ConvertFrom-Json
+    # Write-Host '::group::File -> Chunk -> Change'
+    # for ($i=0; $i -lt $files.Count; $i++) {
+    #     $f = $files[$i]
+    #     # Show what properties each file object really has
+    #     Write-Host "`n[File #$i] Props: $($f.psobject.Properties.Name -join ', ')"
+    #     # Show the raw JSON so you can see shape & names
+    #     Write-Host ($f | ConvertTo-Json -Depth 4)
+        
+    #     # If it really has a “chunks” array, walk it
+    #     if ($f.PSObject.Properties.Name -contains 'chunks') {
+    #         foreach ($chunk in $f.chunks) {
+    #             # print the hunk header or first 60 chars of the diff block
+    #             $hdr = ($chunk.content ?? $chunk.header) -as [string]
+    #             Write-Host "  CHUNK: $($hdr.Trim().Substring(0,[math]::Min(60,$hdr.Length)))"
+    #             foreach ($chg in $chunk.changes) {
+    #                 $mark = switch ($chg.type) { 'add' {'+'} 'del' {'-'} default {' '} }
+    #                 # Show old-line/new-line markers + content
+    #                 "{0,6} {1,6} {2} {3}" -f ($chg.ln2 -or ''), ($chg.ln1 -or ''), $mark, $chg.content |
+    #                 Write-Host
+    #             }
+    #         }
+    #     }
+    #     else {
+    #         Write-Host "  → no chunks on this object, so nothing to walk"
+    #     }
+    # }
+
+    # Write-Host '::endgroup::'
+    
+    # turn empty/null into an array so the rest of the pipeline is safe
+    $files    = @($files)
+    if (-not $files.Count) {
+        Write-Host 'Patch is empty. Skipping review.'
+        return
     }
 
     # keep the rest of the pipeline
-    $files   = Parse-Patch $patch
+    # Write-Host '::group::git patch (raw)'
+    # Write-Host $patch
+    # Write-Host '::endgroup::'
 
     Write-Host '::group::Raw $files'
     foreach ($f in $files) {
@@ -714,15 +710,9 @@ Process {
                 Write-Host "-> No app.json found for this file"
             }
         }
-
-        # 4) if *none* of the changed files live under an app, include *all* apps
-        if (-not $relevantApps.Keys.Count) {
-            Write-Host "-> No specific app hits; including all apps"
-            foreach ($a in $allAppJsons) { $relevantApps[$a] = $true }
-        }
         Write-Host '::endgroup::'
 
-        # 5) now queue context files for each app.json we care about
+        # 4) now queue context files for each app.json we care about
         foreach ($appJson in $relevantApps.Keys) {
             $appRoot    = Split-Path $appJson -Parent
             $relAppJson = [IO.Path]::GetRelativePath($repoRoot, $appJson) -replace '\\','/'
@@ -816,9 +806,9 @@ Process {
 
         # convert git diff to al code
         $norm = Convert-PatchToCode -Patch $patch
-        Write-Host '::group::Git diff (normalized)'
-        Write-Host $norm.Text
-        Write-Host '::endgroup::'
+        # Write-Host '::group::Git diff (normalized)'
+        # Write-Host $norm.Text
+        # Write-Host '::endgroup::'
         $triggers = Get-TriggeredGuidelines -Patch $norm.Text
 
         foreach ($hit in $triggers) {
@@ -912,6 +902,9 @@ $BasePromptExtra
 * If you find nothing, set `"comments": []`.
 * Keep acknowledgments short and neutral.
 * Output GitHub-flavoured Markdown inside `"comment"` fields only.
+* You must output **only** a single JSON object (no surrounding text).  
+* All JSON strings must be properly escaped so that they parse without error.  
+* Do not include markdown in "comments" fields
 
 Focus exclusively on the code: naming, performance, events/trigger usage, filters,
 record locking, permission/entitlement changes, UI strings (tone & BC terminology).
@@ -946,6 +939,24 @@ Example of an empty-but-valid result:
         description = $pr.body
         base        = $pr.base.sha
         head        = $pr.head.sha
+    }
+
+    # build a payload of { path, changes:[{lineNumber, content}] }
+    $aiFiles = foreach ($f in $files) {
+        $changes = foreach ($chunk in $f.chunks) {
+            foreach ($chg in $chunk.changes) {
+                # use ln2 (new‐file line) for comments; fall back to ln if needed
+                $ln = if ($chg.ln2) { $chg.ln2 } elseif ($chg.ln) { $chg.ln } else { continue }
+                [pscustomobject]@{
+                    lineNumber = $ln
+                    content    = $chg.content
+                }
+            }
+        }
+        [pscustomobject]@{
+            path    = $f.path
+            changes = $changes
+        }
     }
 
     $messages = @(
@@ -984,7 +995,7 @@ Example of an empty-but-valid result:
     }
 
     $raw    = $resp.choices[0].message.content.Trim() -replace '^```json','' -replace '```$',''
-    Write-Host "[DEBUG] Model returned:"
+    Write-Host "[DEBUG] Model returned: "
     Write-Host $raw
 
     # Model is nice and provides regex snippets (which break the json) -> sanitize any “\x” sequences where x != one of the valid JSON escapes
@@ -992,33 +1003,49 @@ Example of an empty-but-valid result:
     # This turns \s into \\s (which JSON then interprets as the literal characters \ + s) without touching \n or \".
     $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
 
-    $review = $raw | ConvertFrom-Json
-    $review.summary += "`n`n------`n`n_Code review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model._"
+    $review = Convert-FromAiJson -Raw $raw
+    $review.summary += "`n`n------`n`n_Code review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model."`
+    
+    $review.summary += "`n<!-- ai-sha:$headRef -->"
 
     ########################################################################
     # 8. Map inline comments & submit review
     ########################################################################
 
     # Build inline comment objects
-    $inline = @(
-        foreach ($c in $review.comments) {
-            $f = $relevant | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
-            if (-not $f) { continue }
-            $idx = [int]$c.line - 1
-            if ($idx -lt $f.lineMap.Count) {
-                @{ path = $c.path; line = $f.lineMap[$idx]; side = 'RIGHT'; body = $c.comment }
-            }
-        }
-    )
+    $inline = foreach ($c in $review.comments) {
 
-    # Cap inline comments only if a positive limit is specified (0 = unlimited)
-    if ($MaxComments -gt 0) {
-        if ($inline.Count -gt $MaxComments) {
-            Write-Host "Truncating inline comments: showing only first $MaxComments of $($inline.Count)"
-            $inline = $inline[0..($MaxComments - 1)]
+        # --- find the parse-diff file object ---------------------------------
+        $fileObj = $files |
+                Where-Object { $_.path -eq $c.path } |
+                Select-Object -First 1
+        if (-not $fileObj) { continue }
+
+        # --- hunt the matching change (ln2 ▸ ln ▸ ln1) -----------------------
+        $change = $fileObj.chunks |
+                ForEach-Object { $_.changes } |
+                Where-Object {
+                    ($_.ln2 -eq [int]$c.line) -or
+                    ($_.ln  -eq [int]$c.line) -or
+                    ($_.ln1 -eq [int]$c.line)
+                } |
+                Select-Object -First 1
+        if (-not $change) { continue }   # nothing mapped → skip comment
+
+        # --- build the inline-comment record ---------------------------------
+        [pscustomobject]@{
+            path = $c.path
+            line = $change.ln2 ?? $change.ln ?? $change.ln1   # whichever matched
+            side = 'RIGHT'     # always the “after” side
+            body = $c.comment  # already Markdown
         }
     }
-    else {
+
+    # 8.3 Enforce overall cap
+    if ($MaxComments -gt 0 -and $inline.Count -gt $MaxComments) {
+        Write-Host "Truncating inline comments: showing only first $MaxComments of $($inline.Count)"
+        $inline = $inline[0..($MaxComments - 1)]
+    } else {
         Write-Host "Posting all $($inline.Count) inline comments"
     }
 
@@ -1029,19 +1056,14 @@ Example of an empty-but-valid result:
     try {
         # 1. create the review (summary only)
         $reviewResponse = New-Review
-        $reviewId = $reviewResponse.id
-
-        # 2. add inline comments, if any
-        foreach ($c in $inline) {
-            Add-ReviewComment -ReviewId $reviewId -Comment $c
-        }
+        $url = $reviewResponse.html_url
+        Write-Host "Review posted: $url"
     } catch {
-        Write-Warning "Submitting inline comments failed: $_  - falling back to summary-only"
+        Write-Warning "Submitting review failed: $_"
     }
 
     Write-Host "Review complete for PR #$prNumber"
     }
-
 
 End {
     Write-Host 'Invoke-AICodeReview finished.'
