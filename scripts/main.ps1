@@ -997,27 +997,29 @@ Example of an empty-but-valid result:
     # Build inline comment objects
     $inline = foreach ($c in $review.comments) {
 
-        $file = $files | Where-Object { $_.path -eq $c.path }
-        if (-not $file) { continue }          # file not in diff
+        # find the parse-diff File object
+        $fileObj = $files | Where-Object { $_.to -eq $c.path }
+        if (-not $fileObj) { continue }    # file wasn’t in the diff
+
+        # locate the matching change entry (uses ln2 for new-file line numbers)
+        $change = $fileObj.chunks.changes |
+                  Where-Object { $_.ln2 -eq [int]$c.line } |
+                  Select-Object -First 1
+        if (-not $change) { continue }    # couldn’t map AI’s line back
 
         [pscustomobject]@{
-            path     = $c.path
-            line     = [int]$c.lineMap[$idx]   # new-file line from mapping
-            side     = 'RIGHT'                 # always comment on the "after" side
-            body     = $c.comment              # markdown already escaped by the model
+            path = $c.path
+            line = $change.ln2           # new-file line number
+            side = 'RIGHT'               # always comment on “after” side
+            body = $c.comment            # already Markdown-escaped
         }
-        Write-Host "Create inline comment: path=$($c.path) line=$($c.line) body=$($c.comment)"
     }
 
-    # Cap inline comments only if a positive limit is specified (0 = unlimited)
     # 8.3 Enforce overall cap
-    if ($MaxComments -gt 0) {
-        if ($inline.Count -gt $MaxComments) {
-            Write-Host "Truncating inline comments: showing only first $MaxComments of $($inline.Count)"
-            $inline = $inline[0..($MaxComments - 1)]
-        }
-    }
-    else {
+    if ($MaxComments -gt 0 -and $inline.Count -gt $MaxComments) {
+        Write-Host "Truncating inline comments: showing only first $MaxComments of $($inline.Count)"
+        $inline = $inline[0..($MaxComments - 1)]
+    } else {
         Write-Host "Posting all $($inline.Count) inline comments"
     }
 
