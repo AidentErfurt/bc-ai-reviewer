@@ -437,6 +437,11 @@ closingIssuesReferences(first: 50) {
             [int]$MaxAttempts = 5
         )
 
+        # 1) kill BOM / zero-width space and control chars that JSON cannot swallow
+        $json = $Raw.TrimStart([char]0xFEFF, [char]0x200B)
+        $json = $json -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
+
+        # escape single back-slashes that aren't part of a legal sequence
         $badBackslash = [regex]'(?<!\\)\\(?![\\/"bfnrtu]|u[0-9a-fA-F]{4})'
         $json = $Raw
 
@@ -444,7 +449,7 @@ closingIssuesReferences(first: 50) {
             try { return $json | ConvertFrom-Json }
             catch {
                 $json = $badBackslash.Replace($json,'\\$&')
-                Write-Verbose "Retry #$try – escaped stray back-slash"
+                Write-Verbose "Retry #$try - escaped stray back-slash or cleaned control chars"
             }
         }
 
@@ -514,7 +519,7 @@ Process {
     }
 
     if ($lastSha) {
-        Write-Host "Found previous AI review marker: $lastSha"
+        Write-Host "Last-commit selection: marker-based (found <!-- ai-sha:$lastSha --> in review)"
         $lastCommit = $lastSha
     }
     else {
@@ -531,6 +536,7 @@ Process {
             $lastCommit = ($commits |
                 Where-Object { [datetime]$_.commit.committer.date -le $revDate } |
                 Select-Object -Last 1).sha
+            Write-Host "Last-commit selection: timestamp-based (fallback to latest bot review)"
         }
     }
 
@@ -540,6 +546,16 @@ Process {
     # decide which commits to diff
     $baseRef = if ($lastCommit) { $lastCommit } else { $pr.base.sha }
     $headRef = $pr.head.sha
+
+    # Fetch the commit message for BaseRef (first line only)
+    try {
+        $commitInfo = Invoke-GitHub -Path "/repos/$owner/$repo/commits/$baseRef"
+        $msgLine = $commitInfo.commit.message.Split("`n")[0]
+        Write-Host "lastCommit Commit message:      $msgLine"
+    }
+    catch {
+        Write-Warning "Could not fetch commit message for $($baseRef): $_"
+    }
 
     # run git diff with <DiffContextLines> lines of context, rename detection and no colour codes
     Write-Host "Generating diff with $DiffContextLines lines of context..."
