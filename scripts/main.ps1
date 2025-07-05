@@ -1015,23 +1015,29 @@ Example of an empty-but-valid result:
     # Build inline comment objects
     $inline = foreach ($c in $review.comments) {
 
-        # find the parse-diff File object
-        $fileObj = $files | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
-        if (-not $fileObj) { continue }    # file wasn’t in the diff
+        # --- find the parse-diff file object ---------------------------------
+        $fileObj = $files |
+                Where-Object { $_.path -eq $c.path } |
+                Select-Object -First 1
+        if (-not $fileObj) { continue }
 
-        # locate the matching change entry (uses ln2 for new-file line numbers)
+        # --- hunt the matching change (ln2 ▸ ln ▸ ln1) -----------------------
         $change = $fileObj.chunks |
                 ForEach-Object { $_.changes } |
-                Where-Object   { $_.ln2 -eq [int]$c.line } |
+                Where-Object {
+                    ($_.ln2 -eq [int]$c.line) -or
+                    ($_.ln  -eq [int]$c.line) -or
+                    ($_.ln1 -eq [int]$c.line)
+                } |
                 Select-Object -First 1
+        if (-not $change) { continue }   # nothing mapped → skip comment
 
-        if (-not $change) { continue }    # couldn’t map AI’s line back
-
+        # --- build the inline-comment record ---------------------------------
         [pscustomobject]@{
             path = $c.path
-            line = $change.ln2           # new-file line number
-            side = 'RIGHT'               # always comment on “after” side
-            body = $c.comment            # already Markdown-escaped
+            line = $change.ln2 ?? $change.ln ?? $change.ln1   # whichever matched
+            side = 'RIGHT'     # always the “after” side
+            body = $c.comment  # already Markdown
         }
     }
 
