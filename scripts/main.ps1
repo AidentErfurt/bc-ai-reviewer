@@ -941,6 +941,24 @@ Example of an empty-but-valid result:
         head        = $pr.head.sha
     }
 
+    # build a payload of { path, changes:[{lineNumber, content}] }
+    $aiFiles = foreach ($f in $files) {
+        $changes = foreach ($chunk in $f.chunks) {
+            foreach ($chg in $chunk.changes) {
+                # use ln2 (new‐file line) for comments; fall back to ln if needed
+                $ln = if ($chg.ln2) { $chg.ln2 } elseif ($chg.ln) { $chg.ln } else { continue }
+                [pscustomobject]@{
+                    lineNumber = $ln
+                    content    = $chg.content
+                }
+            }
+        }
+        [pscustomobject]@{
+            path    = $f.path
+            changes = $changes
+        }
+    }
+
     $messages = @(
         @{ role = 'system'; content = $basePrompt },
         @{ role = 'user'; content = (
@@ -998,13 +1016,15 @@ Example of an empty-but-valid result:
     $inline = foreach ($c in $review.comments) {
 
         # find the parse-diff File object
-        $fileObj = $files | Where-Object { $_.to -eq $c.path }
+        $fileObj = $files | Where-Object { $_.path -eq $c.path } | Select-Object -First 1
         if (-not $fileObj) { continue }    # file wasn’t in the diff
 
         # locate the matching change entry (uses ln2 for new-file line numbers)
-        $change = $fileObj.chunks.changes |
-                  Where-Object { $_.ln2 -eq [int]$c.line } |
-                  Select-Object -First 1
+        $change = $fileObj.chunks |
+                ForEach-Object { $_.changes } |
+                Where-Object   { $_.ln2 -eq [int]$c.line } |
+                Select-Object -First 1
+
         if (-not $change) { continue }    # couldn’t map AI’s line back
 
         [pscustomobject]@{
