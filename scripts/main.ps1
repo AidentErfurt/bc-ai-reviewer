@@ -608,9 +608,9 @@ Process {
     }
 
     # keep the rest of the pipeline
-    Write-Host '::group::git patch (raw)'
-    Write-Host $patch
-    Write-Host '::endgroup::'
+    # Write-Host '::group::git patch (raw)'
+    # Write-Host $patch
+    # Write-Host '::endgroup::'
 
     Write-Host '::group::Raw $files'
     foreach ($f in $files) {
@@ -1000,7 +1000,7 @@ Example of an empty-but-valid result:
 
         [pscustomobject]@{
             path     = $c.path
-            line     = [int]$c.line            # new-file line directly
+            line     = [int]$c.lineMap[$idx]   # new-file line from mapping
             side     = 'RIGHT'                 # always comment on the "after" side
             body     = $c.comment              # markdown already escaped by the model
         }
