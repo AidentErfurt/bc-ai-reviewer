@@ -903,12 +903,8 @@ $BasePromptExtra
 * Keep acknowledgments short and neutral.
 * Output GitHub-flavoured Markdown inside `"comment"` fields only.
 * You must output **only** a single JSON object (no surrounding text).  
-  All JSON strings must be properly escaped so that they parse without error.  
-  Inside any "comment" fields you may include Markdown syntax, but:
-
-    1. **Every** backslash (`\`) must be written as `\\\\` (four literal backslashes).  
-    2. Any quotation mark inside a string must be escaped as `\"`.  
-    3. Do **not** emit any unescaped Markdown characters or raw backslashes.
+* All JSON strings must be properly escaped so that they parse without error.  
+* Do not include markdown in "comments" fields
 
 Focus exclusively on the code: naming, performance, events/trigger usage, filters,
 record locking, permission/entitlement changes, UI strings (tone & BC terminology).
