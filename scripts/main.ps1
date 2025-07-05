@@ -588,7 +588,7 @@ Process {
                 foreach ($chg in $chunk.changes) {
                     $mark = switch ($chg.type) { 'add' {'+'} 'del' {'-'} default {' '} }
                     # Show old-line/new-line markers + content
-                    "{0,6} {1,6} {2} {3}" -f ($chg.ln2 -or ''), ($chg.ln -or ''), $mark, $chg.content |
+                    "{0,6} {1,6} {2} {3}" -f ($chg.ln2 -or ''), ($chg.ln1 -or ''), $mark, $chg.content |
                     Write-Host
                 }
             }
