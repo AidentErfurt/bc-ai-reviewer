@@ -911,40 +911,42 @@ Example of an empty-but-valid result:
         head        = $pr.head.sha
     }
 
-    # build a payload of { path, changes:[{lineNumber, content}] }
-    $aiFiles = foreach ($f in $files) {
-        $changes = foreach ($chunk in $f.chunks) {
+    # Build a number‑prefixed diff for each file
+    $numberedFiles = foreach ($f in $relevant) {
+        # collect each change line with its target line number.
+        $lines = foreach ($chunk in $f.chunks) {
             foreach ($chg in $chunk.changes) {
-                # use ln2 (new‐file line) for comments; fall back to ln if needed
-                $ln = if ($chg.ln2) { $chg.ln2 } elseif ($chg.ln) { $chg.ln } else { continue }
-                [pscustomobject]@{
-                    lineNumber = $ln
-                    content    = $chg.content
-                }
+            # prefer the new‑file line number (ln2) if available, otherwise original (ln)
+            $ln = if ($chg.ln2) { $chg.ln2 } elseif ($chg.ln) { $chg.ln } else { continue }
+            # prefix: "<line> <content>". Like "42 +    AddedCode()"
+            "$ln $($chg.content)"
             }
         }
+
         [pscustomobject]@{
-            path    = $f.path
-            changes = $changes
+            path = $f.path
+            diff = ($lines -join "`n")
         }
     }
 
+    # Send that numbered diff to the model
     $messages = @(
-        @{ role = 'system'; content = $basePrompt },
-        @{ role = 'user'; content = (
-            @{
-                type         = 'code_review'
-                files        = $relevant | ForEach-Object { @{ path = $_.path; diff = $_.diff } }
-                contextFiles = $ctxFiles
-                pullRequest  = $pullObj
-                issues       = $issueCtx
-                context      = @{
-                    repository     = $env:GITHUB_REPOSITORY
-                    projectContext = $ProjectContext
-                    isUpdate       = [bool]$lastCommit
-                }
-            } | ConvertTo-Json -Depth 6
-        )}
+    @{ role = 'system'; content = $basePrompt },
+    @{ role = 'user';   content = (
+        @{
+            type         = 'code_review'
+            files        = $numberedFiles
+            contextFiles = $ctxFiles
+            pullRequest  = $pullObj
+            issues       = $issueCtx
+            context      = @{
+                repository     = $env:GITHUB_REPOSITORY
+                projectContext = $ProjectContext
+                isUpdate       = [bool]$lastCommit
+            }
+        } | ConvertTo-Json -Depth 6
+        )
+    }
     )
 
     $promptJson = $messages | ConvertTo-Json -Depth 8
@@ -984,42 +986,11 @@ Example of an empty-but-valid result:
 
     # Build inline comment objects
     $inline = foreach ($c in $review.comments) {
-
-        # --- find the parse-diff file object ---------------------------------
-        $fileObj = $files |
-                Where-Object { $_.path -eq $c.path } |
-                Select-Object -First 1
-
-        if (-not $fileObj) {
-            Write-Warning "No diff info for path '$($c.path)'. Skipping comment."
-            continue
-        }
-
-        # --- try the tight mapping (ln2 -> ln -> ln1) --------------------------
-        $change = $fileObj.chunks |
-                ForEach-Object { $_.changes } |
-                Where-Object {
-                    ($_.ln2 -eq [int]$c.line) -or
-                    ($_.ln  -eq [int]$c.line) -or
-                    ($_.ln1 -eq [int]$c.line)
-                } |
-                Select-Object -First 1
-
-        if ($change) {
-            $mappedLine = $change.ln2 ?? $change.ln ?? $change.ln1
-        }
-        else {
-            # fallback: use the model‑provided line number verbatim
-            Write-Warning "Falling back: could not map comment for '$($c.path)' at line $($c.line)"
-            $mappedLine = [int]$c.line
-        }
-
-        # build the inline‑comment record -------------------------------
         [pscustomobject]@{
             path = $c.path
-            line = $mappedLine
-            side = 'RIGHT'     # always the “after” side
-            body = $c.comment  # already Markdown
+            line = [int]$c.line
+            side = 'RIGHT'
+            body = $c.comment
         }
     }
 
