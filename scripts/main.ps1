@@ -463,6 +463,7 @@ closingIssuesReferences(first: 50) {
 
     $ErrorActionPreference = 'Stop'
     Write-Host "Repository: $env:GITHUB_REPOSITORY  Provider: $Provider"
+    if ($AzureEndpoint)      { Write-Host "::add-mask::$AzureEndpoint" }
     if ($ApiKey)      { Write-Host "::add-mask::$ApiKey" }
     if ($AzureApiKey) { Write-Host "::add-mask::$AzureApiKey" }
 
