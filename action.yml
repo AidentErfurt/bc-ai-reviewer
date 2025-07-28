@@ -20,7 +20,7 @@ inputs:
   AI_MODEL:
     description: "Model or deployment name"
     type: string
-    default: "gpt-4o-mini"
+    default: "o3-mini"
 
   AI_API_KEY:
     description: "OpenAI API key (required if provider=openai | openrouter)"
@@ -49,7 +49,10 @@ inputs:
     default: false
 
   MAX_COMMENTS:
-    description: "Hard cap on inline comments (0 = unlimited)"
+    description: |
+      Maximum inline comments to post.
+      0 = unlimited, but GitHub caps a single review at 100 comments
+      and a PR at 1000 total.
     type: number
     default: 10
 
@@ -92,7 +95,9 @@ inputs:
 
   # Git diff context
   DIFF_CONTEXT_LINES:
-    description: "Number of context lines for git diff --unified"
+    description: |
+      Lines of unchanged context to keep around each diff hunk.
+      GitHub allows 0-100; 0 = no context, 100 ≈ full file.
     default: 5
 
   AUTO_DETECT_APPS:
@@ -125,46 +130,51 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Setup Node.js (v20)
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Install diff parser
+      shell: pwsh
+      run: npm install --no-save parse-diff@latest
+
     - name: Run AI Code Review
       shell: pwsh
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
-        GITHUB_EVENT_PATH:  ${{ github.event_path }}
+        GITHUB_EVENT_PATH: ${{ github.event_path }}
         OPENAI_API_KEY: ${{ inputs.AI_API_KEY }}
         AZURE_OPENAI_API_KEY: ${{ inputs.AZURE_API_KEY }}
       run: |
         . '${{ github.action_path }}/scripts/main.ps1'
-
-        # build parameter splat 
+        
         $p = @{
-          GitHubToken      = '${{ inputs.GITHUB_TOKEN }}'
-          Provider         = '${{ inputs.AI_PROVIDER }}'
-          Model            = '${{ inputs.AI_MODEL }}'
-          MaxComments      = [int]${{ inputs.MAX_COMMENTS }}
-          ProjectContext   = '${{ inputs.PROJECT_CONTEXT }}'
-          ContextFiles     = '${{ inputs.CONTEXT_FILES }}'
-          IncludePatterns  = '${{ inputs.INCLUDE_PATTERNS }}'
-          ExcludePatterns  = '${{ inputs.EXCLUDE_PATTERNS }}'
-          IssueCount       = [int]${{ inputs.ISSUE_COUNT }}
+          GitHubToken        = '${{ inputs.GITHUB_TOKEN }}'
+          Provider           = '${{ inputs.AI_PROVIDER }}'
+          Model              = '${{ inputs.AI_MODEL }}'
+          MaxComments        = [int]'${{ inputs.MAX_COMMENTS }}'
+          ProjectContext     = '${{ inputs.PROJECT_CONTEXT }}'
+          ContextFiles       = '${{ inputs.CONTEXT_FILES }}'
+          IncludePatterns    = '${{ inputs.INCLUDE_PATTERNS }}'
+          ExcludePatterns    = '${{ inputs.EXCLUDE_PATTERNS }}'
+          IssueCount         = [int]'${{ inputs.ISSUE_COUNT }}'
           AutoDetectApps        = [bool]::Parse('${{ inputs.AUTO_DETECT_APPS }}')
           IncludeAppPermissions = [bool]::Parse('${{ inputs.INCLUDE_APP_PERMISSIONS }}')
           IncludeAppMarkdown    = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
-          BasePromptExtra = '${{ inputs.BASE_PROMPT_EXTRA }}'
-          GuidelineRulesPath     = '${{ inputs.GUIDELINE_RULES_PATH }}'
+          BasePromptExtra    = '${{ inputs.BASE_PROMPT_EXTRA }}'
+          GuidelineRulesPath = '${{ inputs.GUIDELINE_RULES_PATH }}'
+          DiffContextLines   = [int]'${{ inputs.DIFF_CONTEXT_LINES }}'
         }
-
-        # switches 
         if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true')  { $p.ApproveReviews  = $true }
         if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }
 
-        # provider-specific credentials
         if ($p.Provider -in @('openai','openrouter')) {
-            $p.ApiKey = $Env:OPENAI_API_KEY
-        }
-        else {
-            $p.AzureEndpoint   = '${{ inputs.AZURE_ENDPOINT }}'
-            $p.AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
-            $p.AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
+          $p.ApiKey = $Env:OPENAI_API_KEY
+        } else {
+          $p.AzureEndpoint   = '${{ inputs.AZURE_ENDPOINT }}'
+          $p.AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
+          $p.AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
         }
 
         Invoke-AICodeReview @p

@@ -21,7 +21,7 @@ The action fetches the PR diff, optional context files, and any referenced issue
 | ------------------------- | -------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
 | `GITHUB_TOKEN`            | **yes**                                            | –                            | Token with `contents:read`, `pull-requests:write`, `issues:read`.                         |
 | `AI_PROVIDER`             | no                                                 | `azure`                      | Which backend to call: `openai` \| `azure` \| `openrouter`.                                   |
-| `AI_MODEL`                | no                                                 | `gpt-4o-mini`                | Model name (OpenAI/OpenRouter) **or** deployment name (Azure).                                |
+| `AI_MODEL`                | no                                                 | `o3-mini`                    | Model name (OpenAI/OpenRouter) **or** deployment name (Azure).                                |
 | `AI_API_KEY`              | only when `AI_PROVIDER` = `openai` \| `openrouter` | –                            | Public OpenAI key or OpenRouter key.                                                          |
 | `AZURE_ENDPOINT`          | only when `AI_PROVIDER` = `azure`                  | –                            | Your Azure OpenAI endpoint URL.                                                               |
 | `AZURE_API_KEY`           | only when `AI_PROVIDER` = `azure`                  | –                            | Azure OpenAI key.                                                                             |
