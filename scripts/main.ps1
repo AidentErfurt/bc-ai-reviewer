@@ -989,9 +989,13 @@ Example of an empty-but-valid result:
         $fileObj = $files |
                 Where-Object { $_.path -eq $c.path } |
                 Select-Object -First 1
-        if (-not $fileObj) { continue }
 
-        # --- hunt the matching change (ln2 ▸ ln ▸ ln1) -----------------------
+        if (-not $fileObj) {
+            Write-Warning "No diff info for path '$($c.path)'. Skipping comment."
+            continue
+        }
+
+        # --- try the tight mapping (ln2 -> ln -> ln1) --------------------------
         $change = $fileObj.chunks |
                 ForEach-Object { $_.changes } |
                 Where-Object {
@@ -1000,18 +1004,26 @@ Example of an empty-but-valid result:
                     ($_.ln1 -eq [int]$c.line)
                 } |
                 Select-Object -First 1
-        if (-not $change) { continue }   # nothing mapped → skip comment
 
-        # --- build the inline-comment record ---------------------------------
+        if ($change) {
+            $mappedLine = $change.ln2 ?? $change.ln ?? $change.ln1
+        }
+        else {
+            # fallback: use the model‑provided line number verbatim
+            Write-Warning "Falling back: could not map comment for '$($c.path)' at line $($c.line)"
+            $mappedLine = [int]$c.line
+        }
+
+        # build the inline‑comment record -------------------------------
         [pscustomobject]@{
             path = $c.path
-            line = $change.ln2 ?? $change.ln ?? $change.ln1   # whichever matched
+            line = $mappedLine
             side = 'RIGHT'     # always the “after” side
             body = $c.comment  # already Markdown
         }
     }
 
-    # 8.3 Enforce overall cap
+    # Enforce overall cap
     if ($MaxComments -gt 0 -and $inline.Count -gt $MaxComments) {
         Write-Host "Truncating inline comments: showing only first $MaxComments of $($inline.Count)"
         $inline = $inline[0..($MaxComments - 1)]
