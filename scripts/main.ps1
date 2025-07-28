@@ -144,6 +144,7 @@ function Invoke-AICodeReview {
         [ValidateRange(0,[int]::MaxValue)]
         [int]$IssueCount = 0,
         [switch] $FetchClosedIssues,
+        [ValidateRange(0,[int]::MaxValue)]
         [int] $DiffContextLines = 5,
         [bool] $AutoDetectApps        = $false,
         [bool] $IncludeAppPermissions = $true,
@@ -235,7 +236,7 @@ Begin {
     }
 
     ############################################################################
-    # helper: return every issue linked to the PR (GraphQL)
+    # Helper: return every issue linked to the PR (GraphQL)
     ############################################################################
 
     function Get-PRLinkedIssues {
@@ -280,7 +281,7 @@ closingIssuesReferences(first: 50) {
     }
 
     ########################################################################
-    # helper: normalise a git patch for guideline scanning
+    # Helper: normalise a git patch for guideline scanning
     ########################################################################
     
     function Convert-PatchToCode {
@@ -571,32 +572,6 @@ Process {
     # Parse with **parse-diff** via NodeJS
     $scriptJs = Join-Path $PSScriptRoot 'parse-diff.js'
     $files    = $patch | node $scriptJs | ConvertFrom-Json
-    # Write-Host '::group::File -> Chunk -> Change'
-    # for ($i=0; $i -lt $files.Count; $i++) {
-    #     $f = $files[$i]
-    #     # Show what properties each file object really has
-    #     Write-Host "`n[File #$i] Props: $($f.psobject.Properties.Name -join ', ')"
-    #     # Show the raw JSON so you can see shape & names
-    #     Write-Host ($f | ConvertTo-Json -Depth 4)
-        
-    #     # If it really has a “chunks” array, walk it
-    #     if ($f.PSObject.Properties.Name -contains 'chunks') {
-    #         foreach ($chunk in $f.chunks) {
-    #             # print the hunk header or first 60 chars of the diff block
-    #             $hdr = ($chunk.content ?? $chunk.header) -as [string]
-    #             Write-Host "  CHUNK: $($hdr.Trim().Substring(0,[math]::Min(60,$hdr.Length)))"
-    #             foreach ($chg in $chunk.changes) {
-    #                 $mark = switch ($chg.type) { 'add' {'+'} 'del' {'-'} default {' '} }
-    #                 # Show old-line/new-line markers + content
-    #                 "{0,6} {1,6} {2} {3}" -f ($chg.ln2 -or ''), ($chg.ln1 -or ''), $mark, $chg.content |
-    #                 Write-Host
-    #             }
-    #         }
-    #     }
-    #     else {
-    #         Write-Host "  → no chunks on this object, so nothing to walk"
-    #     }
-    # }
 
     # Write-Host '::endgroup::'
     
@@ -607,19 +582,14 @@ Process {
         return
     }
 
-    # keep the rest of the pipeline
-    # Write-Host '::group::git patch (raw)'
-    # Write-Host $patch
+    # Write-Host '::group::Raw $files'
+    # foreach ($f in $files) {
+    #     $kind  = if ($f -is [pscustomobject]) { 'PSCustomObject' } else { $f.GetType().Name }
+    #     $hasP  = $f -is [pscustomobject] -and $f.psobject.Properties['path']
+    #     $text  = if ($hasP) { $f.path } else { '<no path>' }
+    #     Write-Verbose ("{0,-15}  hasPath={1}  value={2}" -f $kind,$hasP,$text)
+    # }
     # Write-Host '::endgroup::'
-
-    Write-Host '::group::Raw $files'
-    foreach ($f in $files) {
-        $kind  = if ($f -is [pscustomobject]) { 'PSCustomObject' } else { $f.GetType().Name }
-        $hasP  = $f -is [pscustomobject] -and $f.psobject.Properties['path']
-        $text  = if ($hasP) { $f.path } else { '<no path>' }
-        Write-Verbose ("{0,-15}  hasPath={1}  value={2}" -f $kind,$hasP,$text)
-    }
-    Write-Host '::endgroup::'
 
     $files = @($files)               # wrap null / scalar into an array
     if (-not $files) {               # still empty? -> nothing to review
@@ -1004,7 +974,7 @@ Example of an empty-but-valid result:
     $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
 
     $review = Convert-FromAiJson -Raw $raw
-    $review.summary += "`n`n------`n`n_Code review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model."`
+    $review.summary += "`n`n------`n`nCode review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model."`
     
     $review.summary += "`n<!-- ai-sha:$headRef -->"
 

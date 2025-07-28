@@ -20,7 +20,7 @@ inputs:
   AI_MODEL:
     description: "Model or deployment name"
     type: string
-    default: "gpt-4o-mini"
+    default: "o3-mini"
 
   AI_API_KEY:
     description: "OpenAI API key (required if provider=openai | openrouter)"
