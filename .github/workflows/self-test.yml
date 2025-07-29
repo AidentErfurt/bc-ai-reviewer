@@ -23,7 +23,7 @@ jobs:
         uses: ./
         with:
           GITHUB_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
-          AI_PROVIDER:         openrouter
+          AI_PROVIDER:         azure
           AZURE_ENDPOINT:      ${{ secrets.AZURE_ENDPOINT }}
           AZURE_API_KEY:       ${{ secrets.AZUREOPENAIKEYO3MINI }}
           AZURE_API_VERSION:  '2025-01-01-preview'
