@@ -566,17 +566,22 @@ Process {
     # 3. Fetch & parse diff   (incremental)
     ############################################################################
     # decide which commits to diff
-    if ($lastCommit) {
-        $baseRef = $lastCommit
-    } else {
-        # true fork‑point of the current branch against the PRs base branch
-        $baseRef = (& git merge-base --fork-point $pr.base.sha $pr.head.sha).Trim()
-        if (-not $baseRef) {
-            throw "merge-base not found between $($pr.base.sha) and $($pr.head.sha)"
+    $baseRef = if ($lastCommit) { $lastCommit } else { $pr.base.sha }
+    $headRef = $pr.head.sha
+
+    # Make sure both SHAs exist locally - otherwise fetch them on‑demand
+    foreach ($sha in @($baseRef, $headRef)) {
+        if (-not (& git cat-file -e "$sha^{commit}" 2>$null)) {
+            Write-Host "Commit $sha not present locally - fetching it from origin…"
+            & git fetch --no-tags --depth=1 origin $sha
         }
     }
 
-    $headRef = $pr.head.sha
+    # If $baseRef still doesn’t exist, fall back to the merge‑base
+    if (-not (& git cat-file -e "$baseRef^{commit}" 2>$null)) {
+        Write-Warning "Last-reviewed commit not in history - falling back to merge-base."
+        $baseRef = (& git merge-base $pr.base.sha $pr.head.sha).Trim()
+    }
 
     # Fetch the commit message for BaseRef (first line only)
     try {
@@ -592,7 +597,7 @@ Process {
     Write-Host "Generating diff with $DiffContextLines lines of context..."
     $changedPaths = Get-GHChangedFiles -Owner $owner -Repo $repo -PrNumber $prNumber
     if (-not $changedPaths) {
-        Write-Host 'GitHub reports no changed files – nothing to review.'
+        Write-Host 'GitHub reports no changed files - nothing to review.'
         return
     }
 
