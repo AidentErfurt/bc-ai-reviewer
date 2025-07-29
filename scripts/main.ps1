@@ -457,24 +457,24 @@ closingIssuesReferences(first: 50) {
         throw "Failed to sanitise AI response after $MaxAttempts attempts."
     }
 
-
-    #######################################################################
-    # Helper: Ask GitHub for the canonical file list
-        #######################################################################
-
-    function Get-GHChangedFiles {
-        param($Owner,$Repo,[int]$PrNumber)
-
-        $all  = @()
-        $page = 1
-        do {
-            $resp = Invoke-GitHub `
-                    -Path "/repos/$Owner/$Repo/pulls/$PrNumber/files?per_page=100&page=$page"
-            $all  += $resp
-            $page++
-        } while ($resp.Count -eq 100)
-
-        return $all | ForEach-Object { $_.filename }
+    ############################################################################
+    # Helper: download a unified diff for any two SHAs via the REST API
+    ############################################################################
+    function Get-PRDiff {
+        param(
+            [string]$Owner,
+            [string]$Repo,
+            [string]$BaseSha,
+            [string]$HeadSha
+        )
+        # The compare‑commits endpoint supports raw‑diff if you ask for it:
+        #   GET /repos/:owner/:repo/compare/:base...:head
+        #   Accept: application/vnd.github.diff
+        #
+        # It already contains the per‑file headers that parse‑diff expects.
+        Invoke-GitHub `
+            -Path  "/repos/$Owner/$Repo/compare/$BaseSha...$HeadSha" `
+            -Accept 'application/vnd.github.diff'
     }
 
     ############################################################################
@@ -563,51 +563,23 @@ Process {
     }
 
     ############################################################################
-    # 3. Fetch & parse diff   (incremental)
+    # 3. Fetch & parse diff   (incremental, via GitHub API)
     ############################################################################
-    # decide which commits to diff
+    # Decide which commits to diff
     $baseRef = if ($lastCommit) { $lastCommit } else { $pr.base.sha }
     $headRef = $pr.head.sha
 
-    # Make sure both SHAs exist locally - otherwise fetch them on‑demand
-    foreach ($sha in @($baseRef, $headRef)) {
-        if (-not (& git cat-file -e "$sha^{commit}" 2>$null)) {
-            Write-Host "Commit $sha not present locally - fetching it from origin…"
-            & git fetch --no-tags --depth=1 origin $sha
-        }
-    }
+    # Ask GitHub for a raw unified diff between the two SHAs
+    $patch = Get-PRDiff -Owner $owner -Repo $repo -BaseSha $baseRef -HeadSha $headRef
 
-    # If $baseRef still doesn’t exist, fall back to the merge‑base
-    if (-not (& git cat-file -e "$baseRef^{commit}" 2>$null)) {
-        Write-Warning "Last-reviewed commit not in history - falling back to merge-base."
-        $baseRef = (& git merge-base $pr.base.sha $pr.head.sha).Trim()
-    }
-
-    # Fetch the commit message for BaseRef (first line only)
-    try {
-        $commitInfo = Invoke-GitHub -Path "/repos/$owner/$repo/commits/$baseRef"
-        $msgLine = $commitInfo.commit.message.Split("`n")[0]
-        Write-Host "lastCommit Commit message:      $msgLine"
-    }
-    catch {
-        Write-Warning "Could not fetch commit message for $($baseRef): $_"
-    }
-
-    # run git diff with <DiffContextLines> lines of context, rename detection and no colour codes
-    Write-Host "Generating diff with $DiffContextLines lines of context..."
-    $changedPaths = Get-GHChangedFiles -Owner $owner -Repo $repo -PrNumber $prNumber
-    if (-not $changedPaths) {
-        Write-Host 'GitHub reports no changed files - nothing to review.'
+    if (-not $patch) {
+        Write-Host "GitHub returned an empty diff - nothing to review."
         return
     }
 
-    # Join the paths after a `--` so git limits the diff to exactly that list
-    $patch = (& git diff --unified=$DiffContextLines `
-                        --find-renames `
-                        --diff-filter=ACDMR `
-                        --no-color `
-                        $baseRef $headRef -- $changedPaths | Out-String)
-
+    # GitHub API always returns three lines of context
+    # DiffContextLines switch is therefore ignored** from here on.
+ 
     # Guard‑rail first -> abort early if diff is huge
     $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
     $maxBytes = 500KB
@@ -1013,6 +985,12 @@ Example of an empty-but-valid result:
     }
 
     $raw    = $resp.choices[0].message.content.Trim() -replace '^```json','' -replace '```$',''
+    if (-not $resp -or -not $resp.choices -or -not $resp.choices.Count) {
+        $msg = "Azure OpenAI returned no choices:`n$(($resp | ConvertTo-Json -Depth 6))"
+        Write-Error $msg
+        return      # or   throw $msg
+    }
+
     Write-Host "[DEBUG] Model returned: "
     Write-Host $raw
 
