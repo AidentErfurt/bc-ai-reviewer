@@ -458,6 +458,26 @@ closingIssuesReferences(first: 50) {
     }
 
     ############################################################################
+    # Helper: download a unified diff for any two SHAs via the REST API
+    ############################################################################
+    function Get-PRDiff {
+        param(
+            [string]$Owner,
+            [string]$Repo,
+            [string]$BaseSha,
+            [string]$HeadSha
+        )
+        # The compare‑commits endpoint supports raw‑diff if you ask for it:
+        #   GET /repos/:owner/:repo/compare/:base...:head
+        #   Accept: application/vnd.github.diff
+        #
+        # It already contains the per‑file headers that parse‑diff expects.
+        Invoke-GitHub `
+            -Path  "/repos/$Owner/$Repo/compare/$BaseSha...$HeadSha" `
+            -Accept 'application/vnd.github.diff'
+    }
+
+    ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode...
     ############################################################################
 
@@ -543,27 +563,24 @@ Process {
     }
 
     ############################################################################
-    # 3. Fetch & parse diff   (incremental)
+    # 3. Fetch & parse diff   (incremental, via GitHub API)
     ############################################################################
-    # decide which commits to diff
+    # Decide which commits to diff
     $baseRef = if ($lastCommit) { $lastCommit } else { $pr.base.sha }
     $headRef = $pr.head.sha
 
-    # Fetch the commit message for BaseRef (first line only)
-    try {
-        $commitInfo = Invoke-GitHub -Path "/repos/$owner/$repo/commits/$baseRef"
-        $msgLine = $commitInfo.commit.message.Split("`n")[0]
-        Write-Host "lastCommit Commit message:      $msgLine"
-    }
-    catch {
-        Write-Warning "Could not fetch commit message for $($baseRef): $_"
+    # Ask GitHub for a raw unified diff between the two SHAs
+    $patch = Get-PRDiff -Owner $owner -Repo $repo -BaseSha $baseRef -HeadSha $headRef
+
+    if (-not $patch) {
+        Write-Host "GitHub returned an empty diff - nothing to review."
+        return
     }
 
-    # run git diff with <DiffContextLines> lines of context, rename detection and no colour codes
-    Write-Host "Generating diff with $DiffContextLines lines of context..."
-    $patch = (& git diff --unified=$DiffContextLines --find-renames --diff-filter=ACDMR --no-color $baseRef $headRef | Out-String)
-
-    # Guard‑rail first → abort early if diff is huge
+    # GitHub API always returns three lines of context
+    # DiffContextLines switch is therefore ignored** from here on.
+ 
+    # Guard‑rail first -> abort early if diff is huge
     $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
     $maxBytes = 500KB
     if ($byteSize -gt $maxBytes) {
@@ -968,6 +985,12 @@ Example of an empty-but-valid result:
     }
 
     $raw    = $resp.choices[0].message.content.Trim() -replace '^```json','' -replace '```$',''
+    if (-not $resp -or -not $resp.choices -or -not $resp.choices.Count) {
+        $msg = "Azure OpenAI returned no choices:`n$(($resp | ConvertTo-Json -Depth 6))"
+        Write-Error $msg
+        return      # or   throw $msg
+    }
+
     Write-Host "[DEBUG] Model returned: "
     Write-Host $raw
 
