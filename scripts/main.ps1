@@ -94,6 +94,9 @@ limitations under the License.
 .PARAMETER DisableGuidelineDocs
     Switch. Skip fetching AL-Guidelines docs.
 
+.PARAMETER IncludeChangedFilesAsContext
+    Ship every file that is touched by the PR to the LLM as an extra context file
+
 .EXAMPLE
     .\main.ps1 -GitHubToken $env:GITHUB_TOKEN -Provider azure -AzureEndpoint 'https://...' -ContextFiles 'README.md,docs/*.md'
 
@@ -144,14 +147,13 @@ function Invoke-AICodeReview {
         [ValidateRange(0,[int]::MaxValue)]
         [int]$IssueCount = 0,
         [switch] $FetchClosedIssues,
-        [ValidateRange(0,[int]::MaxValue)]
-        [int] $DiffContextLines = 5,
         [bool] $AutoDetectApps        = $false,
         [bool] $IncludeAppPermissions = $true,
         [bool] $IncludeAppMarkdown    = $true,
         [string] $BasePromptExtra,
         [string] $GuidelineRulesPath = '',
-        [switch] $DisableGuidelineDocs
+        [switch] $DisableGuidelineDocs,
+        [bool] $IncludeChangedFilesAsContext = $true
     )
 
 Begin {
@@ -478,6 +480,36 @@ closingIssuesReferences(first: 50) {
     }
 
     ############################################################################
+    # Helper: get raw text of a file (HEAD version) – returns $null for binaries
+    ############################################################################
+    function Get-FileContent {
+        param(
+            [string]$Owner,
+            [string]$Repo,
+            [string]$Path,
+            [string]$RefSha   # usually $pr.head.sha
+        )
+
+        try {
+            $blob = Invoke-GitHub `
+                    -Path "/repos/$Owner/$Repo/contents/$($Path)?ref=$RefSha"
+
+            if ($blob.type -ne 'file' -or $blob.encoding -ne 'base64') { return $null }
+
+            # skip obvious binaries (>200 KB **or** contains NUL)
+            $bytes = [Convert]::FromBase64String($blob.content)
+            if ($bytes.Length -gt 200KB) { return $null }
+            if ($bytes -contains 0)      { return $null }
+
+            return [System.Text.Encoding]::UTF8.GetString($bytes)
+        }
+        catch {
+            Write-Warning "Could not fetch blob '$Path': $_"
+            return $null
+        }
+    }
+
+    ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode...
     ############################################################################
 
@@ -528,7 +560,6 @@ Process {
     # Look for the most recent review by the bot that contains our marker
     $markerRx  = [regex]'<!--\s*ai-sha:(?<sha>[0-9a-f]{7,40})\s*-->'
     $lastSha   = $null
-    $reviewHit = $null
 
     foreach ($rev in ($reviews | Sort-Object submitted_at -Descending)) {
         if ($rev.user.login -ne 'github-actions[bot]') { continue }
@@ -577,9 +608,7 @@ Process {
         return
     }
 
-    # GitHub API always returns three lines of context
-    # DiffContextLines switch is therefore ignored** from here on.
- 
+
     # Guard‑rail first -> abort early if diff is huge
     $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
     $maxBytes = 500KB
@@ -620,7 +649,7 @@ Process {
     Write-Host '::endgroup::'
 
     ############################################################################
-    # 4. Filter files by include/exclude patterns
+    # 4a. Filter files by include/exclude patterns
     ############################################################################
 
     # Pre-compile your globs into real WildcardPattern objects:
@@ -665,6 +694,37 @@ Process {
             -f $maxFiles, $relevant.Count
         )
         $relevant = $relevant[0..($maxFiles - 1)]
+    }
+
+    ############################################################################
+    # 4b.  Add changed files themselves as extra context (optional)
+    ############################################################################
+    if ($IncludeChangedFilesAsContext) {
+        Write-Host "::group::Adding changed files as context"
+        foreach ($f in $relevant) {
+            # deleted / renamed‑to‑devnull?  => nothing to fetch
+            if ($f.to -eq '/dev/null') { continue }
+
+            $content = Get-FileContent -Owner $owner -Repo $repo `
+                                    -Path  $f.path -RefSha $headRef
+            if ($content) {
+                $ctxFiles += [pscustomobject]@{
+                    path    = $f.path
+                    content = $content
+                }
+                Write-Host "  + $($f.path)"
+            }
+        }
+        Write-Host "::endgroup::"
+    }
+
+    # Hard‑cap total context size (~500 keeps GPT‑4o‑mini well under 16k tokens)
+    $ctxBytes = ($ctxFiles | Measure-Object -Property content -Character).Characters
+    if ($ctxBytes -gt 500) {
+        Write-Warning "Context payload is $($ctxBytes/1KB) KB -> trimming oldest entries."
+        $ctxFiles = $ctxFiles |
+                    Sort-Object { $_.content.Length } -Descending |
+                    ForEach-Object -SkipWhile { ($ctxBytes -= $_.content.Length) -gt 500 }
     }
 
     ###########################################################################

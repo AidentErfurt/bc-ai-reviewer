@@ -34,7 +34,6 @@ The action fetches the PR diff, optional context files, and any referenced issue
 | `EXCLUDE_PATTERNS`        | no                                                 | `""`                         | Globs to ignore.                                                                              |
 | `ISSUE_COUNT`             | no                                                 | `0`                          | Max linked issues to fetch (`0` = all).                                                       |
 | `FETCH_CLOSED_ISSUES`     | no                                                 | `true`                       | Include closed issues in the context.                                                         |
-| `DIFF_CONTEXT_LINES`      | no                                                 | `5`                          | Number of surrounding lines for the `git diff --unified` call.                                |
 | `AUTO_DETECT_APPS`        | no                                                 | `true`                       | Auto-discover `app.json` roots and add relevant files as context.                             |
 | `INCLUDE_APP_PERMISSIONS` | no                                                 | `true`                       | If auto-detect is on, include `*.PermissionSet.al` + `*.Entitlement.al` from each app.        |
 | `INCLUDE_APP_MARKDOWN`    | no                                                 | `true`                       | If auto-detect is on, include `*.md` files from each app.                                     |

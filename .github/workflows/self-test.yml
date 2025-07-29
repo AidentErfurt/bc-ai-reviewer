@@ -23,13 +23,12 @@ jobs:
         uses: ./
         with:
           GITHUB_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
-          AI_PROVIDER:         azure
+          AI_PROVIDER:         openrouter
           AZURE_ENDPOINT:      ${{ secrets.AZURE_ENDPOINT }}
           AZURE_API_KEY:       ${{ secrets.AZUREOPENAIKEYO3MINI }}
           AZURE_API_VERSION:  '2025-01-01-preview'
           AI_MODEL:            o3-mini
           MAX_COMMENTS:        10
-          DIFF_CONTEXT_LINES:  5
           APPROVE_REVIEWS:     false
 
           # --- tailor the prompt & context ---

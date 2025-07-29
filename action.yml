@@ -93,13 +93,6 @@ inputs:
     type: boolean
     default: true
 
-  # Git diff context
-  DIFF_CONTEXT_LINES:
-    description: |
-      Lines of unchanged context to keep around each diff hunk.
-      GitHub allows 0-100; 0 = no context, 100 ≈ full file.
-    default: 5
-
   AUTO_DETECT_APPS:
     description: "Enable automatic app.json discovery"
     type: boolean
@@ -126,6 +119,11 @@ inputs:
     description: "Skip fetching the official AL-Guidelines docs"
     type: boolean
     default: false
+
+  INCLUDE_CHANGED_FILE_AS_CONTEXT:
+    description: "Ship every file that is touched by the PR to the LLM as an extra context file"
+    type: boolean
+    default: true
 
 runs:
   using: composite
@@ -165,10 +163,11 @@ runs:
           IncludeAppMarkdown    = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
           BasePromptExtra    = '${{ inputs.BASE_PROMPT_EXTRA }}'
           GuidelineRulesPath = '${{ inputs.GUIDELINE_RULES_PATH }}'
-          DiffContextLines   = [int]'${{ inputs.DIFF_CONTEXT_LINES }}'
         }
+
         if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true')  { $p.ApproveReviews  = $true }
         if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }
+        if ('${{ inputs.INCLUDE_CHANGED_FILES_AS_CONTEXT }}' -eq 'true') { $p.IncludeChangedFilesAsContext = $true }
 
         if ($p.Provider -in @('openai','openrouter')) {
           $p.ApiKey = $Env:OPENAI_API_KEY
