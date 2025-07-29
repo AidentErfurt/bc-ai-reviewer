@@ -457,6 +457,26 @@ closingIssuesReferences(first: 50) {
         throw "Failed to sanitise AI response after $MaxAttempts attempts."
     }
 
+
+    #######################################################################
+    # Helper: Ask GitHub for the canonical file list
+        #######################################################################
+
+    function Get-GHChangedFiles {
+        param($Owner,$Repo,[int]$PrNumber)
+
+        $all  = @()
+        $page = 1
+        do {
+            $resp = Invoke-GitHub `
+                    -Path "/repos/$Owner/$Repo/pulls/$PrNumber/files?per_page=100&page=$page"
+            $all  += $resp
+            $page++
+        } while ($resp.Count -eq 100)
+
+        return $all | ForEach-Object { $_.filename }
+    }
+
     ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode...
     ############################################################################
@@ -570,9 +590,20 @@ Process {
 
     # run git diff with <DiffContextLines> lines of context, rename detection and no colour codes
     Write-Host "Generating diff with $DiffContextLines lines of context..."
-    $patch = (& git diff --unified=$DiffContextLines --find-renames --diff-filter=ACDMR --no-color $baseRef $headRef | Out-String)
+    $changedPaths = Get-GHChangedFiles -Owner $owner -Repo $repo -PrNumber $prNumber
+    if (-not $changedPaths) {
+        Write-Host 'GitHub reports no changed files – nothing to review.'
+        return
+    }
 
-    # Guard‑rail first → abort early if diff is huge
+    # Join the paths after a `--` so git limits the diff to exactly that list
+    $patch = (& git diff --unified=$DiffContextLines `
+                        --find-renames `
+                        --diff-filter=ACDMR `
+                        --no-color `
+                        $baseRef $headRef -- $changedPaths | Out-String)
+
+    # Guard‑rail first -> abort early if diff is huge
     $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
     $maxBytes = 500KB
     if ($byteSize -gt $maxBytes) {
