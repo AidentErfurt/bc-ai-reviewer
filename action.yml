@@ -137,6 +137,7 @@ runs:
 
     - name: Install diff parser
       shell: pwsh
+      working-directory: ${{ github.action_path }}
       run: npm install --no-save parse-diff@latest
 
     - name: Run AI Code Review
