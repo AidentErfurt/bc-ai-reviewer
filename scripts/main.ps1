@@ -715,7 +715,8 @@ Process {
 
     ############################################################################
     # 4b.  Add changed files themselves as extra context (optional)
-    ############################################################################   
+    ############################################################################
+    $ctxFiles = @()
     if ($IncludeChangedFilesAsContext) {
         Write-Host '::group::Adding changed files as context'
         $prFiles = Get-PRFiles -Owner $owner -Repo $repo -PrNumber $prNumber
@@ -748,7 +749,6 @@ Process {
     # 5. Autodetect app context
     ###########################################################################
 
-    $ctxFiles = @()
     if ($AutoDetectApps) {
         # 1) figure out where the checked-out repo lives
         $repoRoot    = $Env:GITHUB_WORKSPACE
@@ -917,7 +917,7 @@ Process {
 
     ############################################################################
     # 6. Gather linked issues
-    ############################################################################
+    ############################################################################    
     $issueCtx = @()
 
     # a) IDs found in the PR body description (“#123”)
