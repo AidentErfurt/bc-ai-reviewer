@@ -509,6 +509,22 @@ closingIssuesReferences(first: 50) {
         }
     }
 
+    function Get-PRFiles {
+        param(
+            [string]$Owner,
+            [string]$Repo,
+            [int]   $PrNumber
+        )
+        $page = 1; $all = @()
+        do {
+            $resp = Invoke-GitHub `
+                    -Path "/repos/$Owner/$Repo/pulls/$PrNumber/files?per_page=100&page=$page"
+            $all  += $resp
+            $page++
+        } while ($resp.Count -eq 100)
+        return $all
+    }
+
     ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode...
     ############################################################################
@@ -560,6 +576,7 @@ Process {
     # Look for the most recent review by the bot that contains our marker
     $markerRx  = [regex]'<!--\s*ai-sha:(?<sha>[0-9a-f]{7,40})\s*-->'
     $lastSha   = $null
+    $reviewHit = $null
 
     foreach ($rev in ($reviews | Sort-Object submitted_at -Descending)) {
         if ($rev.user.login -ne 'github-actions[bot]') { continue }
@@ -700,25 +717,22 @@ Process {
     # 4b.  Add changed files themselves as extra context (optional)
     ############################################################################   
     if ($IncludeChangedFilesAsContext) {
-        Write-Host "::group::Adding changed files as context"
-        foreach ($f in $relevant) {
-            $filePath = $f.path            # always there
-
-            # skip deleted files: GitHub marks them as path = <original path>,
-            #                     and parse‑diff sets $f.deletions > 0, $f.additions = 0, $f.chunks = @()
-            if ($f.additions -eq 0 -and $f.deletions -gt 0) { continue }
+        Write-Host '::group::Adding changed files as context'
+        $prFiles = Get-PRFiles -Owner $owner -Repo $repo -PrNumber $prNumber
+        foreach ($f in $prFiles) {
+            if ($f.status -eq 'removed') { continue }   # skip deleted files
 
             $content = Get-FileContent -Owner $owner -Repo $repo `
-                                    -Path  $filePath -RefSha $headRef
+                                    -Path  $f.filename -RefSha $headRef
             if ($content) {
                 $ctxFiles += [pscustomobject]@{
-                    path    = $filePath
+                    path    = $f.filename
                     content = $content
                 }
-                Write-Host "  + $filePath"
+                Write-Host "  + $($f.filename)"
             }
         }
-        Write-Host "::endgroup::"
+        Write-Host '::endgroup::'
     }
 
     # Hard‑cap total context size (~500 keeps GPT‑4o‑mini well under 16k tokens)
