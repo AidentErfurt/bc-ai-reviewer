@@ -698,21 +698,24 @@ Process {
 
     ############################################################################
     # 4b.  Add changed files themselves as extra context (optional)
-    ############################################################################
+    ############################################################################   
     if ($IncludeChangedFilesAsContext) {
         Write-Host "::group::Adding changed files as context"
         foreach ($f in $relevant) {
-            # deleted / renamed‑to‑devnull?  => nothing to fetch
-            if ($f.to -eq '/dev/null') { continue }
+            $filePath = $f.path            # always there
+
+            # skip deleted files: GitHub marks them as path = <original path>,
+            #                     and parse‑diff sets $f.deletions > 0, $f.additions = 0, $f.chunks = @()
+            if ($f.additions -eq 0 -and $f.deletions -gt 0) { continue }
 
             $content = Get-FileContent -Owner $owner -Repo $repo `
-                                    -Path  $f.path -RefSha $headRef
+                                    -Path  $filePath -RefSha $headRef
             if ($content) {
                 $ctxFiles += [pscustomobject]@{
-                    path    = $f.path
+                    path    = $filePath
                     content = $content
                 }
-                Write-Host "  + $($f.path)"
+                Write-Host "  + $filePath"
             }
         }
         Write-Host "::endgroup::"
