@@ -546,7 +546,16 @@ Process {
     # 3. Fetch & parse diff   (incremental)
     ############################################################################
     # decide which commits to diff
-    $baseRef = if ($lastCommit) { $lastCommit } else { $pr.base.sha }
+    if ($lastCommit) {
+        $baseRef = $lastCommit
+    } else {
+        # true fork‑point of the current branch against the PRs base branch
+        $baseRef = (& git merge-base --fork-point $pr.base.sha $pr.head.sha).Trim()
+        if (-not $baseRef) {
+            throw "merge-base not found between $($pr.base.sha) and $($pr.head.sha)"
+        }
+    }
+
     $headRef = $pr.head.sha
 
     # Fetch the commit message for BaseRef (first line only)
