@@ -170,7 +170,14 @@ runs:
         if ('${{ inputs.INCLUDE_CHANGED_FILES_AS_CONTEXT }}' -eq 'true') { $p.IncludeChangedFilesAsContext = $true }
 
         switch ($p.Provider) {
-          'openai','openrouter' {
+          'openai' {
+             # only ApiKey, no azure bits
+            $p.ApiKey = $Env:OPENAI_API_KEY
+            $p.Remove('AzureEndpoint')
+            $p.Remove('AzureApiKey')
+            $p.Remove('AzureApiVersion')
+          }
+          'openrouter' {
              # only ApiKey, no azure bits
             $p.ApiKey = $Env:OPENAI_API_KEY
             $p.Remove('AzureEndpoint')
