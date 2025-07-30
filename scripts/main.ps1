@@ -1116,15 +1116,40 @@ Example of an empty-but-valid result:
             Where-Object ln2 | ForEach-Object ln2)   # head‑side line numbers
     }
 
-    $inline = @(
-      foreach ($c in $review.comments) {
-            [pscustomobject]@{
-                path = $c.path
-                line = [int]$c.line
-                side = 'RIGHT'
-                body = $c.comment
+    $validLines = @{}
+    $sideMap    = @{}            # remembers whether a line is on LEFT or RIGHT
+
+    foreach ($f in $relevant) {
+        $lines   = @()
+        $sides   = @{}
+        foreach ($chunk in $f.chunks) {
+            foreach ($chg in $chunk.changes) {
+                if ($chg.type -eq 'add') {          # added line  -> RIGHT / ln2
+                    $lines += [int]$chg.ln2
+                    $sides[$chg.ln2] = 'RIGHT'
+                }
+                elseif ($chg.type -eq 'del') {      # deleted line -> LEFT / ln
+                    $lines += [int]$chg.ln
+                    $sides[$chg.ln ] = 'LEFT'
+                }
             }
-      }
+        }
+        $validLines[$f.path] = $lines | Sort-Object -Unique
+        $sideMap[$f.path] = $sides
+    }
+
+    $inline = @(
+        foreach ($c in $review.comments) {
+            $side = $sideMap[$c.path][$c.line]
+            if ($side) {
+                [pscustomobject]@{
+                    path = $c.path
+                    line = [int]$c.line
+                    side = $side         # LEFT for deletions, RIGHT otherwise
+                    body = $c.comment
+                }
+            }
+        }
     )
 
     # Early‑exit if nothing survived
