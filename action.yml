@@ -191,10 +191,9 @@ runs:
 
         # debug
         $p.GetEnumerator() |
-            Sort-Object Name |
-            ForEach-Object {
-                '{0,-22}: {1}' -f $_.Key,
-                (if ($_.Value -eq $null) { '<null>' } else { $_.Value })
-            }
+          Sort-Object Name |
+          ForEach-Object {
+              '{0,-22}: {1}' -f $_.Key, ($_.Value ?? '<null>')
+          }
 
         Invoke-AICodeReview @p
