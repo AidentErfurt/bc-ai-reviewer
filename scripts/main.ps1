@@ -573,7 +573,7 @@ Process {
     # Look for the most recent review by the bot that contains our marker
     $markerRx  = [regex]'<!--\s*ai-sha:(?<sha>[0-9a-f]{7,40})\s*-->'
     $lastSha   = $null
-    $reviewHit9 = $null
+    $reviewHit = $null
 
     foreach ($rev in ($reviews | Sort-Object submitted_at -Descending)) {
         if ($rev.user.login -ne 'github-actions[bot]') { continue }
@@ -968,6 +968,11 @@ $BasePromptExtra
 * All JSON strings must be properly escaped so that they parse without error.  
 * Do not include markdown in "comments" fields
 
+**Do not add inline comments for anything you see only in `contextFiles`.**
+Inline `comments` **must** reference a `path` & `line` that exists in the
+numbered `files` diff above. Anything you see in contextFiles is read-only reference.
+Comments that don't match will be ignored.
+
 Focus exclusively on the code: naming, performance, events/trigger usage, filters,
 record locking, permission/entitlement changes, UI strings (tone & BC terminology).
 
@@ -990,10 +995,6 @@ Example of an empty-but-valid result:
 "suggestedAction": "approve",
 "confidence": 0.95
 }
-
-**Do not add inline comments for anything you see only in `contextFiles`.**
-Inline `comments` **must** reference a `path` & `line` that exists in the
-numbered `files` diff above. Comments that don't match will be ignored.
 "@
 
     if ($lastCommit) {
@@ -1087,6 +1088,12 @@ numbered `files` diff above. Comments that don't match will be ignored.
     ########################################################################
 
     # Build inline comment objects
+    $validLines = @{}
+    $relevant | ForEach-Object {
+        $validLines[$_.path] = @($_.chunks.changes |
+            Where-Object ln2 | ForEach-Object ln2)   # head‑side line numbers
+    }
+
     $inline = foreach ($c in $review.comments) {
         [pscustomobject]@{
             path = $c.path
@@ -1094,6 +1101,11 @@ numbered `files` diff above. Comments that don't match will be ignored.
             side = 'RIGHT'
             body = $c.comment
         }
+    }
+
+    # Early‑exit if nothing survived
+    if (-not $inline) {
+        Write-Warning 'AI produced no valid inline comments; summary‑only review will be posted.'
     }
 
     # Enforce overall cap
