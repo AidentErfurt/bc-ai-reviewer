@@ -733,7 +733,7 @@ Process {
         Write-Host '::endgroup::'
     }
 
-    # $ctxBytes = ($ctxFiles | Measure-Object -Property content -Character).Characters
+    # $ctxBytes = ($ctxFiles | Measure-Object -Property content -Character).Characters 
     # if ($ctxBytes -gt 500) {
     #     Write-Warning "Context payload is $($ctxBytes/1KB) KB -> trimming oldest entries."
     #     $ctxFiles = $ctxFiles |
@@ -1115,7 +1115,6 @@ Example of an empty-but-valid result:
             Where-Object ln2 | ForEach-Object ln2)   # head‑side line numbers
     }
 
-    $validLines = @{}
     $sideMap    = @{}            # remembers whether a line is on LEFT or RIGHT
 
     foreach ($f in $relevant) {
@@ -1123,13 +1122,15 @@ Example of an empty-but-valid result:
         $sides   = @{}
         foreach ($chunk in $f.chunks) {
             foreach ($chg in $chunk.changes) {
-                if ($chg.type -eq 'add') {          # added line  -> RIGHT / ln2
-                    $lines += [int]$chg.ln2
-                    $sides[$chg.ln2] = 'RIGHT'
-                }
-                elseif ($chg.type -eq 'del') {      # deleted line -> LEFT / ln
+                if ($chg.type -eq 'del') {            # a line that disappeared
+                    $sides[$chg.ln] = 'LEFT'
                     $lines += [int]$chg.ln
-                    $sides[$chg.ln ] = 'LEFT'
+                }
+                elseif ($chg.type -eq 'add') {       # only add RIGHT if key unused
+                    if (-not $sides.ContainsKey($chg.ln2)) {
+                        $sides[$chg.ln2] = 'RIGHT'
+                        $lines += [int]$chg.ln2
+                    }
                 }
             }
         }
