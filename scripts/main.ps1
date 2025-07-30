@@ -1109,13 +1109,15 @@ Example of an empty-but-valid result:
             Where-Object ln2 | ForEach-Object ln2)   # head‑side line numbers
     }
 
-    $inline = foreach ($c in $review.comments) {
-        [pscustomobject]@{
-            path = $c.path
-            line = [int]$c.line
-            side = 'RIGHT'
-            body = $c.comment
-        }
+    $inline = @(
+        foreach ($c in $review.comments) {
+            [pscustomobject]@{
+                path = $c.path
+                line = [int]$c.line
+                side = 'RIGHT'
+                body = $c.comment
+            }
+        )
     }
 
     # Early‑exit if nothing survived
