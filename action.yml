@@ -123,7 +123,7 @@ inputs:
   INCLUDE_CHANGED_FILE_AS_CONTEXT:
     description: "Ship every file that is touched by the PR to the LLM as an extra context file"
     type: boolean
-    default: true
+    default: false
 
 runs:
   using: composite
