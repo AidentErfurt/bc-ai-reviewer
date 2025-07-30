@@ -163,37 +163,16 @@ runs:
           IncludeAppMarkdown    = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
           BasePromptExtra    = '${{ inputs.BASE_PROMPT_EXTRA }}'
           GuidelineRulesPath = '${{ inputs.GUIDELINE_RULES_PATH }}'
-          ApiKey            = $null
-          AzureEndpoint     = $null
-          AzureApiKey       = $null
-          AzureApiVersion   = $null
         }
-
         if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true')  { $p.ApproveReviews  = $true }
         if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }
 
         if ($p.Provider -in @('openai','openrouter')) {
-          # OpenAI / OpenRouter
           $p.ApiKey = $Env:OPENAI_API_KEY
-          # remove every Azure-only key so the binder sees a single parameter set
-          $p.Remove('AzureEndpoint')
-          $p.Remove('AzureApiKey')
-          $p.Remove('AzureApiVersion')
-        }
-        else {
-          # Azure
+        } else {
           $p.AzureEndpoint   = '${{ inputs.AZURE_ENDPOINT }}'
           $p.AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
           $p.AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
-          # ensure the OpenAI-only key is gone
-          $p.Remove('ApiKey')
         }
-
-        # debug
-        $p.GetEnumerator() |
-          Sort-Object Name |
-          ForEach-Object {
-              '{0,-22}: {1}' -f $_.Key, ($_.Value ?? '<null>')
-          }
 
         Invoke-AICodeReview @p

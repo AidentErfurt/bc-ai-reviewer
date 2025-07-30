@@ -73,9 +73,6 @@ limitations under the License.
 .PARAMETER OpenRouterTitle
     Optional OpenRouter marketing headers.
 
-.PARAMETER DiffContextLines
-    Control the number of lines that surround each difference when running git diff.
-
 .PARAMETER AutoDetectApps
     Auto-include app.json files as context.
 
@@ -576,7 +573,7 @@ Process {
     # Look for the most recent review by the bot that contains our marker
     $markerRx  = [regex]'<!--\s*ai-sha:(?<sha>[0-9a-f]{7,40})\s*-->'
     $lastSha   = $null
-    $reviewHit = $null
+    $reviewHit9 = $null
 
     foreach ($rev in ($reviews | Sort-Object submitted_at -Descending)) {
         if ($rev.user.login -ne 'github-actions[bot]') { continue }
