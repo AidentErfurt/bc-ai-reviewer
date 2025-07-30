@@ -169,12 +169,21 @@ runs:
         if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }
         if ('${{ inputs.INCLUDE_CHANGED_FILES_AS_CONTEXT }}' -eq 'true') { $p.IncludeChangedFilesAsContext = $true }
 
-        if ($p.Provider -in @('openai','openrouter')) {
-          $p.ApiKey = $Env:OPENAI_API_KEY
-        } else {
-          $p.AzureEndpoint   = '${{ inputs.AZURE_ENDPOINT }}'
-          $p.AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
-          $p.AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
+        switch ($p.Provider) {
+          'openai' | 'openrouter' {
+             # only ApiKey, no azure bits
+            $p.ApiKey = $Env:OPENAI_API_KEY
+            $p.Remove('AzureEndpoint')
+            $p.Remove('AzureApiKey')
+            $p.Remove('AzureApiVersion')
+          }
+          'azure' {
+            # only azure bits, no ApiKey
+            $p.AzureEndpoint   = '${{ inputs.AZURE_ENDPOINT }}'
+            $p.AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
+            $p.AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
+            $p.Remove('ApiKey')
+          }
         }
 
         Invoke-AICodeReview @p
