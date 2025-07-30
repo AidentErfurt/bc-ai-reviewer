@@ -1110,15 +1110,15 @@ Example of an empty-but-valid result:
     }
 
     $inline = @(
-        foreach ($c in $review.comments) {
+      foreach ($c in $review.comments) {
             [pscustomobject]@{
                 path = $c.path
                 line = [int]$c.line
                 side = 'RIGHT'
                 body = $c.comment
             }
-        )
-    }
+      }
+    )
 
     # Early‑exit if nothing survived
     if (-not $inline) {
