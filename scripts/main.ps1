@@ -990,6 +990,10 @@ Example of an empty-but-valid result:
 "suggestedAction": "approve",
 "confidence": 0.95
 }
+
+**Do not add inline comments for anything you see only in `contextFiles`.**
+Inline `comments` **must** reference a `path` & `line` that exists in the
+numbered `files` diff above. Comments that don't match will be ignored.
 "@
 
     if ($lastCommit) {
