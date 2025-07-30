@@ -523,78 +523,6 @@ closingIssuesReferences(first: 50) {
     }
 
     ############################################################################
-    # Helper: Extract BC object meta‑data from an AL file
-    ############################################################################
-    function Get-AlObjectMetadata {
-        <#
-        .OUTPUTS  PSCustomObject @{ path; objectType; objectId; name; sourceTable }
-        #>
-        param([string]$Path,[string]$Content)
-
-        # first non‑comment line that starts with an AL object keyword
-        if ($Content -match '^\s*(codeunit|page(?:extension)?|table(?:extension)?|report|query)\s+(\d+)\s+"([^"]+)"') {
-            $objType = $matches[1]
-            $objId   = [int]$matches[2]
-            $name    = $matches[3]
-
-            $srcTable = $null
-            if ($objType -in 'page','pageextension','report','codeunit') {
-                if ($Content -match '(?m)^\s*Source(Table)?\s*=\s*"?([\w\s]+)"?;?') {
-                    $srcTable = $matches[2]
-                }
-            }
-
-            [pscustomobject]@{
-                path        = $Path
-                objectType  = $objType
-                objectId    = $objId
-                name        = $name
-                sourceTable = $srcTable
-            }
-        }
-    }
-
-    ############################################################################
-    # Helper: Return the full trigger / procedure block around a changed line
-    ############################################################################
-    function Get-AlSnippet {
-        <#
-            .OUTPUTS  PSCustomObject @{ path; content }
-        #>
-        param(
-            [string]$Path,
-            [string[]]$FileLines,
-            [int[]]  $ChangedLines,   # 1‑based
-            [int]    $MaxContextBefore = 20,
-            [int]    $MaxContextAfter  = 20
-        )
-
-        # find the smallest begin/ end or procedure ... begin / end block
-        foreach ($ln in $ChangedLines) {
-            # walk backwards to the nearest "procedure", "trigger", "begin"
-            $start = $ln
-            while ($start -gt 0 -and
-                $FileLines[$start-1] -notmatch '^(procedure|trigger)\b|^\s*begin\b') { $start-- }
-
-            # walk forward until matching "end;"
-            $depth = 0; $end = $start
-            for ($i=$start; $i -lt $FileLines.Count; $i++) {
-                if ($FileLines[$i] -match '\bbegin\b') { $depth++ }
-                if ($FileLines[$i] -match '\bend;')    { $depth--; if ($depth -le 0) { $end=$i; break } }
-            }
-
-            # add safety window around it
-            $start = [Math]::Max(0, $start - $MaxContextBefore)
-            $end   = [Math]::Min($FileLines.Count-1, $end + $MaxContextAfter)
-
-            return [pscustomobject]@{
-                path    = $Path
-                content = ($FileLines[$start..$end] -join "`n")
-            }
-        }
-    }
-
-    ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode...
     ############################################################################
 
@@ -813,32 +741,6 @@ Process {
     #                 Sort-Object { $_.content.Length } -Descending |
     #                 ForEach-Object -SkipWhile { ($ctxBytes -= $_.content.Length) -gt 500 }
     # }
-
-    ###########################################################################
-    # 4c. Derive BC object metadata + rich code snippets
-    ###########################################################################
-    $bcObjects   = @()
-    $richSnips   = @()
-
-    foreach ($file in $relevant) {
-        if ($file.path -notmatch '\.al$') { continue }
-
-        # full head‑version of the file
-        $txt = Get-FileContent -Owner $owner -Repo $repo -Path $file.path -RefSha $headRef
-        if (-not $txt) { continue }
-
-        # --- object meta ---------------------------------------------------------
-        $meta = Get-AlObjectMetadata -Path $file.path -Content $txt
-        if ($meta) { $bcObjects += $meta }
-
-        # --- rich snippet (full trigger / proc) ----------------------------------
-        # head‑side line numbers that changed in this file
-        $changed = @($validLines[$file.path])
-        if ($changed) {
-            $snippet = Get-AlSnippet -Path $file.path -FileLines ($txt -split "`n") -ChangedLines $changed
-            if ($snippet) { $richSnips += $snippet }
-        }
-    }
 
     ###########################################################################
     # 5. Autodetect app context
@@ -1152,8 +1054,6 @@ Example of an empty-but-valid result:
             type         = 'code_review'
             files        = $numberedFiles
             validLines   = $validLines
-            bcObjects       = $bcObjects
-            richSnippets    = $richSnips 
             contextFiles = $ctxFiles
             pullRequest  = $pullObj
             issues       = $issueCtx
