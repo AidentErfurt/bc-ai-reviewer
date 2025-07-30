@@ -147,50 +147,40 @@ runs:
         AZURE_OPENAI_API_KEY: ${{ inputs.AZURE_API_KEY }}
       run: |
         . '${{ github.action_path }}/scripts/main.ps1'
-        
-        $p = @{
-          GitHubToken        = '${{ inputs.GITHUB_TOKEN }}'
-          Provider           = '${{ inputs.AI_PROVIDER }}'
-          Model              = '${{ inputs.AI_MODEL }}'
-          MaxComments        = [int]'${{ inputs.MAX_COMMENTS }}'
-          ProjectContext     = '${{ inputs.PROJECT_CONTEXT }}'
-          ContextFiles       = '${{ inputs.CONTEXT_FILES }}'
-          IncludePatterns    = '${{ inputs.INCLUDE_PATTERNS }}'
-          ExcludePatterns    = '${{ inputs.EXCLUDE_PATTERNS }}'
-          IssueCount         = [int]'${{ inputs.ISSUE_COUNT }}'
-          AutoDetectApps        = [bool]::Parse('${{ inputs.AUTO_DETECT_APPS }}')
-          IncludeAppPermissions = [bool]::Parse('${{ inputs.INCLUDE_APP_PERMISSIONS }}')
-          IncludeAppMarkdown    = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
-          BasePromptExtra    = '${{ inputs.BASE_PROMPT_EXTRA }}'
-          GuidelineRulesPath = '${{ inputs.GUIDELINE_RULES_PATH }}'
+
+        # the bits that are common to every invocation
+        $common = @{
+          GitHubToken             = '${{ inputs.GITHUB_TOKEN }}'
+          Provider                = '${{ inputs.AI_PROVIDER }}'
+          Model                   = '${{ inputs.AI_MODEL }}'
+          MaxComments             = [int]'${{ inputs.MAX_COMMENTS }}'
+          ProjectContext          = '${{ inputs.PROJECT_CONTEXT }}'
+          ContextFiles            = '${{ inputs.CONTEXT_FILES }}'
+          IncludePatterns         = '${{ inputs.INCLUDE_PATTERNS }}'
+          ExcludePatterns         = '${{ inputs.EXCLUDE_PATTERNS }}'
+          IssueCount              = [int]'${{ inputs.ISSUE_COUNT }}'
+          FetchClosedIssues       = [switch]::new([bool]::Parse('${{ inputs.FETCH_CLOSED_ISSUES }}'))
+          AutoDetectApps          = [bool]::Parse('${{ inputs.AUTO_DETECT_APPS }}')
+          IncludeAppPermissions   = [bool]::Parse('${{ inputs.INCLUDE_APP_PERMISSIONS }}')
+          IncludeAppMarkdown      = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
+          BasePromptExtra         = '${{ inputs.BASE_PROMPT_EXTRA }}'
+          GuidelineRulesPath      = '${{ inputs.GUIDELINE_RULES_PATH }}'
+          DisableGuidelineDocs    = [switch]::new([bool]::Parse('${{ inputs.DISABLE_GUIDELINEDOCS }}'))
+          IncludeChangedFilesAsContext = [switch]::new([bool]::Parse('${{ inputs.INCLUDE_CHANGED_FILE_AS_CONTEXT }}'))
         }
 
-        if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true')  { $p.ApproveReviews  = $true }
-        if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }
-        if ('${{ inputs.INCLUDE_CHANGED_FILES_AS_CONTEXT }}' -eq 'true') { $p.IncludeChangedFilesAsContext = $true }
-
-        switch ($p.Provider) {
-          'openai' {
-             # only ApiKey, no azure bits
-            $p.ApiKey = $Env:OPENAI_API_KEY
-            $p.Remove('AzureEndpoint')
-            $p.Remove('AzureApiKey')
-            $p.Remove('AzureApiVersion')
+        if ($common.Provider -eq 'azure') {
+          $args = $common + @{
+            AzureEndpoint   = '${{ inputs.AZURE_ENDPOINT }}'
+            AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
+            AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
           }
-          'openrouter' {
-             # only ApiKey, no azure bits
-            $p.ApiKey = $Env:OPENAI_API_KEY
-            $p.Remove('AzureEndpoint')
-            $p.Remove('AzureApiKey')
-            $p.Remove('AzureApiVersion')
-          }
-          'azure' {
-            # only azure bits, no ApiKey
-            $p.AzureEndpoint   = '${{ inputs.AZURE_ENDPOINT }}'
-            $p.AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
-            $p.AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
-            $p.Remove('ApiKey')
+        }
+        elseif ($common.Provider -eq 'openai' -or $common.Provider -eq 'openrouter') {
+          $args = $common + @{
+            ApiKey = $Env:OPENAI_API_KEY
           }
         }
 
-        Invoke-AICodeReview @p
+        # now we only ever pass exactly one set of credentials into Invoke-AICodeReview
+        Invoke-AICodeReview @args
