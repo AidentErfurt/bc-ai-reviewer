@@ -138,58 +138,70 @@ runs:
       working-directory: ${{ github.action_path }}
       run: npm install --no-save parse-diff@latest
 
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js (v20)
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Install diff parser
+      shell: pwsh
+      working-directory: ${{ github.action_path }}
+      run: npm install --no-save parse-diff@latest
+
     - name: Run AI Code Review
       shell: pwsh
       env:
-        GITHUB_REPOSITORY:    ${{ github.repository }}
-        GITHUB_EVENT_PATH:    ${{ github.event_path }}
-        OPENAI_API_KEY:       ${{ inputs.AI_API_KEY }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_EVENT_PATH: ${{ github.event_path }}
+        OPENAI_API_KEY: ${{ inputs.AI_API_KEY }}
         AZURE_OPENAI_API_KEY: ${{ inputs.AZURE_API_KEY }}
       run: |
-        . "${{ github.action_path }}/scripts/main.ps1"
-
-        if ('${{ inputs.AI_PROVIDER }}' -eq 'azure') {
-          Invoke-AICodeReview `
-            -GitHubToken    '${{ inputs.GITHUB_TOKEN }}' `
-            -Provider       'azure' `
-            -Model          '${{ inputs.AI_MODEL }}' `
-            -MaxComments    ${{ inputs.MAX_COMMENTS }} `
-            -ProjectContext '${{ inputs.PROJECT_CONTEXT }}' `
-            -ContextFiles   '${{ inputs.CONTEXT_FILES }}' `
-            -IncludePatterns '${{ inputs.INCLUDE_PATTERNS }}' `
-            -ExcludePatterns '${{ inputs.EXCLUDE_PATTERNS }}' `
-            -IssueCount     ${{ inputs.ISSUE_COUNT }} `
-            -FetchClosedIssues:$([bool]::Parse('${{ inputs.FETCH_CLOSED_ISSUES }}')) `
-            -AutoDetectApps $([bool]::Parse('${{ inputs.AUTO_DETECT_APPS }}')) `
-            -IncludeAppPermissions $([bool]::Parse('${{ inputs.INCLUDE_APP_PERMISSIONS }}')) `
-            -IncludeAppMarkdown $([bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')) `
-            -BasePromptExtra      '${{ inputs.BASE_PROMPT_EXTRA }}' `
-            -GuidelineRulesPath   '${{ inputs.GUIDELINE_RULES_PATH }}' `
-            -DisableGuidelineDocs:$([bool]::Parse('${{ inputs.DISABLE_GUIDELINEDOCS }}')) `
-            -IncludeChangedFilesAsContext:$([bool]::Parse('${{ inputs.INCLUDE_CHANGED_FILE_AS_CONTEXT }}')) `
-            -AzureEndpoint   '${{ inputs.AZURE_ENDPOINT }}' `
-            -AzureApiKey     $Env:AZURE_OPENAI_API_KEY `
-            -AzureApiVersion '${{ inputs.AZURE_API_VERSION }}'
-        }
-        elseif ('${{ inputs.AI_PROVIDER }}' -in 'openai','openrouter') {
-          Invoke-AICodeReview `
-            -GitHubToken    '${{ inputs.GITHUB_TOKEN }}' `
-            -Provider       '${{ inputs.AI_PROVIDER }}' `
-            -Model          '${{ inputs.AI_MODEL }}' `
-            -MaxComments    ${{ inputs.MAX_COMMENTS }} `
-            -ProjectContext '${{ inputs.PROJECT_CONTEXT }}' `
-            -ContextFiles   '${{ inputs.CONTEXT_FILES }}' `
-            -IncludePatterns '${{ inputs.INCLUDE_PATTERNS }}' `
-            -ExcludePatterns '${{ inputs.EXCLUDE_PATTERNS }}' `
-            -IssueCount     ${{ inputs.ISSUE_COUNT }} `
-            -FetchClosedIssues:$([bool]::Parse('${{ inputs.FETCH_CLOSED_ISSUES }}')) `
-            -AutoDetectApps $([bool]::Parse('${{ inputs.AUTO_DETECT_APPS }}')) `
-            -IncludeAppPermissions $([bool]::Parse('${{ inputs.INCLUDE_APP_PERMISSIONS }}')) `
-            -IncludeAppMarkdown $([bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')) `
-            -BasePromptExtra      '${{ inputs.BASE_PROMPT_EXTRA }}' `
-            -GuidelineRulesPath   '${{ inputs.GUIDELINE_RULES_PATH }}' `
-            -DisableGuidelineDocs:$([bool]::Parse('${{ inputs.DISABLE_GUIDELINEDOCS }}')) `
-            -IncludeChangedFilesAsContext:$([bool]::Parse('${{ inputs.INCLUDE_CHANGED_FILE_AS_CONTEXT }}')) `
-            -ApiKey $Env:OPENAI_API_KEY
+        . '${{ github.action_path }}/scripts/main.ps1'
+        
+        $p = @{
+          GitHubToken        = '${{ inputs.GITHUB_TOKEN }}'
+          Provider           = '${{ inputs.AI_PROVIDER }}'
+          Model              = '${{ inputs.AI_MODEL }}'
+          MaxComments        = [int]'${{ inputs.MAX_COMMENTS }}'
+          ProjectContext     = '${{ inputs.PROJECT_CONTEXT }}'
+          ContextFiles       = '${{ inputs.CONTEXT_FILES }}'
+          IncludePatterns    = '${{ inputs.INCLUDE_PATTERNS }}'
+          ExcludePatterns    = '${{ inputs.EXCLUDE_PATTERNS }}'
+          IssueCount         = [int]'${{ inputs.ISSUE_COUNT }}'
+          AutoDetectApps        = [bool]::Parse('${{ inputs.AUTO_DETECT_APPS }}')
+          IncludeAppPermissions = [bool]::Parse('${{ inputs.INCLUDE_APP_PERMISSIONS }}')
+          IncludeAppMarkdown    = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
+          BasePromptExtra    = '${{ inputs.BASE_PROMPT_EXTRA }}'
+          GuidelineRulesPath = '${{ inputs.GUIDELINE_RULES_PATH }}'
+          DiffContextLines   = [int]'${{ inputs.DIFF_CONTEXT_LINES }}'
+          # pre-seed both key types with $null, we’ll tidy them up below
+          ApiKey            = $null
+          AzureEndpoint     = $null
+          AzureApiKey       = $null
+          AzureApiVersion   = $null
         }
 
+        if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true')  { $p.ApproveReviews  = $true }
+        if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }
+
+        if ($p.Provider -in @('openai','openrouter')) {
+          # OpenAI / OpenRouter
+          $p.ApiKey = $Env:OPENAI_API_KEY
+          # remove every Azure-only key so the binder sees a single parameter set
+          $p.Remove('AzureEndpoint')
+          $p.Remove('AzureApiKey')
+          $p.Remove('AzureApiVersion')
+        }
+        else {
+          # Azure
+          $p.AzureEndpoint   = '${{ inputs.AZURE_ENDPOINT }}'
+          $p.AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
+          $p.AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
+          # ensure the OpenAI-only key is gone
+          $p.Remove('ApiKey')
+        }
+
+        Invoke-AICodeReview @p
