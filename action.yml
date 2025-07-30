@@ -163,8 +163,6 @@ runs:
           IncludeAppMarkdown    = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
           BasePromptExtra    = '${{ inputs.BASE_PROMPT_EXTRA }}'
           GuidelineRulesPath = '${{ inputs.GUIDELINE_RULES_PATH }}'
-          DiffContextLines   = [int]'${{ inputs.DIFF_CONTEXT_LINES }}'
-          # pre-seed both key types with $null, we’ll tidy them up below
           ApiKey            = $null
           AzureEndpoint     = $null
           AzureApiKey       = $null
