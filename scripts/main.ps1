@@ -970,7 +970,8 @@ $BasePromptExtra
 
 **Do not add inline comments for anything you see only in `contextFiles`.**
 Inline `comments` **must** reference a `path` & `line` that exists in the
-numbered `files` diff above. Anything you see in contextFiles is read-only reference.
+numbered `files` diff above (see {path,line} pair that exists in the
+  `validLines` table provided in the request). Anything you see in contextFiles is read-only reference.
 Comments that don't match will be ignored.
 
 Focus exclusively on the code: naming, performance, events/trigger usage, filters,
@@ -1008,6 +1009,19 @@ Example of an empty-but-valid result:
         head        = $pr.head.sha
     }
 
+    # Build a "validLines" whitelist:  { <path> = @(line1,line2,…) }
+    $validLines = @{}
+    foreach ($f in $relevant) {
+        $lines = foreach ($chunk in $f.chunks) {
+            foreach ($chg in $chunk.changes) {
+                if ($chg.ln2) {   # use head‑side line numbers only
+                    [int]$chg.ln2
+                }
+            }
+        }
+        $validLines[$f.path] = $lines | Sort-Object -Unique
+    }
+
     # Build a number‑prefixed diff for each file
     $numberedFiles = foreach ($f in $relevant) {
         # collect each change line with its target line number.
@@ -1033,6 +1047,7 @@ Example of an empty-but-valid result:
         @{
             type         = 'code_review'
             files        = $numberedFiles
+            validLines   = $validLines
             contextFiles = $ctxFiles
             pullRequest  = $pullObj
             issues       = $issueCtx
