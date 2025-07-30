@@ -148,7 +148,6 @@ runs:
       run: |
         . '${{ github.action_path }}/scripts/main.ps1'
 
-        # the bits that are common to every invocation
         $common = @{
           GitHubToken             = '${{ inputs.GITHUB_TOKEN }}'
           Provider                = '${{ inputs.AI_PROVIDER }}'
@@ -182,5 +181,4 @@ runs:
           }
         }
 
-        # now we only ever pass exactly one set of credentials into Invoke-AICodeReview
         Invoke-AICodeReview @args
