@@ -734,13 +734,13 @@ Process {
     }
 
     # Hard‑cap total context size (~500 keeps GPT‑4o‑mini well under 16k tokens)
-    $ctxBytes = ($ctxFiles | Measure-Object -Property content -Character).Characters
-    if ($ctxBytes -gt 500) {
-        Write-Warning "Context payload is $($ctxBytes/1KB) KB -> trimming oldest entries."
-        $ctxFiles = $ctxFiles |
-                    Sort-Object { $_.content.Length } -Descending |
-                    ForEach-Object -SkipWhile { ($ctxBytes -= $_.content.Length) -gt 500 }
-    }
+    # $ctxBytes = ($ctxFiles | Measure-Object -Property content -Character).Characters
+    # if ($ctxBytes -gt 500) {
+    #     Write-Warning "Context payload is $($ctxBytes/1KB) KB -> trimming oldest entries."
+    #     $ctxFiles = $ctxFiles |
+    #                 Sort-Object { $_.content.Length } -Descending |
+    #                 ForEach-Object -SkipWhile { ($ctxBytes -= $_.content.Length) -gt 500 }
+    # }
 
     ###########################################################################
     # 5. Autodetect app context

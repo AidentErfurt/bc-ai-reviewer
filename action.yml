@@ -169,10 +169,14 @@ runs:
 
         if ($p.Provider -in @('openai','openrouter')) {
           $p.ApiKey = $Env:OPENAI_API_KEY
+          $p.Remove('AzureEndpoint')
+          $p.Remove('AzureApiKey')
+          $p.Remove('AzureApiVersion')
         } else {
           $p.AzureEndpoint   = '${{ inputs.AZURE_ENDPOINT }}'
           $p.AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
           $p.AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
+          $p.Remove('ApiKey')
         }
 
         Invoke-AICodeReview @p
