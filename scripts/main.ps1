@@ -733,7 +733,6 @@ Process {
         Write-Host '::endgroup::'
     }
 
-    # # Hard-cap total context size (~500 keeps GPT-4o-mini well under 16k tokens)
     # $ctxBytes = ($ctxFiles | Measure-Object -Property content -Character).Characters
     # if ($ctxBytes -gt 500) {
     #     Write-Warning "Context payload is $($ctxBytes/1KB) KB -> trimming oldest entries."
