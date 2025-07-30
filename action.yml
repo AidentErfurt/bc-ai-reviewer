@@ -138,19 +138,6 @@ runs:
       working-directory: ${{ github.action_path }}
       run: npm install --no-save parse-diff@latest
 
-runs:
-  using: composite
-  steps:
-    - name: Setup Node.js (v20)
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20
-
-    - name: Install diff parser
-      shell: pwsh
-      working-directory: ${{ github.action_path }}
-      run: npm install --no-save parse-diff@latest
-
     - name: Run AI Code Review
       shell: pwsh
       env:
