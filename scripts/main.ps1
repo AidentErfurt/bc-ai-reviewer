@@ -733,7 +733,6 @@ Process {
         Write-Host "::endgroup::"
     }
 
-    # $ctxBytes = ($ctxFiles | Measure-Object -Property content -Character).Characters 
     # if ($ctxBytes -gt 500) {
     #     Write-Warning "Context payload is $($ctxBytes/1KB) KB -> trimming oldest entries."
     #     $ctxFiles = $ctxFiles |
