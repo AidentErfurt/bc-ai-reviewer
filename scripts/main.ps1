@@ -637,7 +637,7 @@ Process {
     # Write-Host "::endgroup::"
     
     # turn empty/null into an array so the rest of the pipeline is safe
-    $files    = @($files)
+    $files = @($files) | Where-Object { $_ }        # drop $null items
     if (-not $files.Count) {
         Write-Host "Patch is empty. Skipping review."
         return
@@ -1146,13 +1146,15 @@ Example of an empty-but-valid result:
 
     $inline = @(
         foreach ($c in $review.comments) {
-            $side = $sideMap[$c.path][$c.line]
-            if ($side) {
-                [pscustomobject]@{
-                    path = $c.path
-                    line = [int]$c.line
-                    side = $side         # LEFT for deletions, RIGHT otherwise
-                    body = $c.comment
+            if ($sideMap.ContainsKey($c.path)) {
+                $fileSideMap = $sideMap[$c.path]
+                if ($fileSideMap.ContainsKey([int]$c.line)) {
+                    [pscustomobject]@{
+                        path = $c.path
+                        line = [int]$c.line
+                        side = $fileSideMap[[int]$c.line]   # LEFT / RIGHT
+                        body = $c.comment
+                    }
                 }
             }
         }
