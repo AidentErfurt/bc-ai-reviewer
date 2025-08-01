@@ -145,8 +145,12 @@ runs:
         GITHUB_EVENT_PATH: ${{ github.event_path }}
         OPENAI_API_KEY: ${{ inputs.AI_API_KEY }}
         AZURE_OPENAI_API_KEY: ${{ inputs.AZURE_API_KEY }}
+        AZURE_OPENAI_ENDPOINT: ${{ inputs.AZURE_ENDPOINT }}
       run: |
         . '${{ github.action_path }}/scripts/main.ps1'
+        if ($Env:AZURE_OPENAI_ENDPOINT) { Write-Host "::add-mask::$Env:AZURE_OPENAI_ENDPOINT" }
+        if ($Env:AZURE_OPENAI_API_KEY)  { Write-Host "::add-mask::$Env:AZURE_OPENAI_API_KEY" }
+        if ($Env:OPENAI_API_KEY)  { Write-Host "::add-mask::$Env:OPENAI_API_KEY" }
         
         $p = @{
           GitHubToken        = '${{ inputs.GITHUB_TOKEN }}'
@@ -173,7 +177,7 @@ runs:
           $p.Remove('AzureApiKey')
           $p.Remove('AzureApiVersion')
         } else {
-          $p.AzureEndpoint   = '${{ inputs.AZURE_ENDPOINT }}'
+          $p.AzureEndpoint   = $Env:AZURE_OPENAI_ENDPOINT
           $p.AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
           $p.AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
           $p.Remove('ApiKey')
