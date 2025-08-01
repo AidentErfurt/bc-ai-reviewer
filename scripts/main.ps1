@@ -966,6 +966,7 @@ Suggest improvements and explain your reasoning for each suggestion.
 $BasePromptExtra
 
 **When you answer:**
+* Open with one or two sentences that **acknowledge what looks good** (clarity, structure, test coverage, etc.).
 * Provide **up to $maxInline concise inline comments** if you spot something worth improving. If more issues exist, aggregate the remainder in summary.
 * if nothing needs improvement, set `"comments": []`.
 * Output GitHub-flavoured Markdown inside `"comment"` fields only; everywhere else use plain text.
