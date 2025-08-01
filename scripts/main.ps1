@@ -73,9 +73,6 @@ limitations under the License.
 .PARAMETER OpenRouterTitle
     Optional OpenRouter marketing headers.
 
-.PARAMETER DiffContextLines
-    Control the number of lines that surround each difference when running git diff.
-
 .PARAMETER AutoDetectApps
     Auto-include app.json files as context.
 
@@ -93,6 +90,9 @@ limitations under the License.
 
 .PARAMETER DisableGuidelineDocs
     Switch. Skip fetching AL-Guidelines docs.
+
+.PARAMETER IncludeChangedFilesAsContext
+    Ship every file that is touched by the PR to the LLM as an extra context file
 
 .EXAMPLE
     .\main.ps1 -GitHubToken $env:GITHUB_TOKEN -Provider azure -AzureEndpoint 'https://...' -ContextFiles 'README.md,docs/*.md'
@@ -144,14 +144,13 @@ function Invoke-AICodeReview {
         [ValidateRange(0,[int]::MaxValue)]
         [int]$IssueCount = 0,
         [switch] $FetchClosedIssues,
-        [ValidateRange(0,[int]::MaxValue)]
-        [int] $DiffContextLines = 5,
         [bool] $AutoDetectApps        = $false,
         [bool] $IncludeAppPermissions = $true,
         [bool] $IncludeAppMarkdown    = $true,
         [string] $BasePromptExtra,
         [string] $GuidelineRulesPath = '',
-        [switch] $DisableGuidelineDocs
+        [switch] $DisableGuidelineDocs,
+        [bool] $IncludeChangedFilesAsContext = $false
     )
 
 Begin {
@@ -249,7 +248,7 @@ repository(owner:$owner, name:$repo) {
 pullRequest(number:$pr) {
 body
 closingIssuesReferences(first: 50) {
-    nodes { number }         # issues closed by “Fixes/Closes #123”
+    nodes { number }         # issues closed by "Fixes/Closes #123"
 }
 }
 }
@@ -272,7 +271,7 @@ closingIssuesReferences(first: 50) {
         $prNode   = $resp.data.repository.pullRequest
         $closing  = @($prNode.closingIssuesReferences.nodes | ForEach-Object number)
 
-        # fallback: plain “#123” mentions in the PR body 
+        # fallback: plain "#123" mentions in the PR body 
         $mentioned = ([regex]'#(?<n>\d+)\b').Matches($prNode.body) |
                     ForEach-Object { [int]$_.Groups['n'].Value }
 
@@ -467,14 +466,60 @@ closingIssuesReferences(first: 50) {
             [string]$BaseSha,
             [string]$HeadSha
         )
-        # The compare‑commits endpoint supports raw‑diff if you ask for it:
+        # The compare-commits endpoint supports raw-diff if you ask for it:
         #   GET /repos/:owner/:repo/compare/:base...:head
         #   Accept: application/vnd.github.diff
         #
-        # It already contains the per‑file headers that parse‑diff expects.
+        # It already contains the per-file headers that parse-diff expects.
         Invoke-GitHub `
             -Path  "/repos/$Owner/$Repo/compare/$BaseSha...$HeadSha" `
             -Accept 'application/vnd.github.diff'
+    }
+
+    ############################################################################
+    # Helper: get raw text of a file (HEAD version) - returns $null for binaries
+    ############################################################################
+    function Get-FileContent {
+        param(
+            [string]$Owner,
+            [string]$Repo,
+            [string]$Path,
+            [string]$RefSha   # usually $pr.head.sha
+        )
+
+        try {
+            $blob = Invoke-GitHub `
+                    -Path "/repos/$Owner/$Repo/contents/$($Path)?ref=$RefSha"
+
+            if ($blob.type -ne 'file' -or $blob.encoding -ne 'base64') { return $null }
+
+            # skip obvious binaries (>200 KB **or** contains NUL)
+            $bytes = [Convert]::FromBase64String($blob.content)
+            if ($bytes.Length -gt 200KB) { return $null }
+            if ($bytes -contains 0)      { return $null }
+
+            return [System.Text.Encoding]::UTF8.GetString($bytes)
+        }
+        catch {
+            Write-Warning "Could not fetch blob '$Path': $_"
+            return $null
+        }
+    }
+
+    function Get-PRFiles {
+        param(
+            [string]$Owner,
+            [string]$Repo,
+            [int]   $PrNumber
+        )
+        $page = 1; $all = @()
+        do {
+            $resp = Invoke-GitHub `
+                    -Path "/repos/$Owner/$Repo/pulls/$PrNumber/files?per_page=100&page=$page"
+            $all  += $resp
+            $page++
+        } while ($resp.Count -eq 100)
+        return $all
     }
 
     ############################################################################
@@ -577,10 +622,8 @@ Process {
         return
     }
 
-    # GitHub API always returns three lines of context
-    # DiffContextLines switch is therefore ignored** from here on.
- 
-    # Guard‑rail first -> abort early if diff is huge
+
+    # Guard-rail first -> abort early if diff is huge
     $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
     $maxBytes = 500KB
     if ($byteSize -gt $maxBytes) {
@@ -591,36 +634,36 @@ Process {
     $scriptJs = Join-Path $PSScriptRoot 'parse-diff.js'
     $files    = $patch | node $scriptJs | ConvertFrom-Json
 
-    # Write-Host '::endgroup::'
+    # Write-Host "::endgroup::"
     
     # turn empty/null into an array so the rest of the pipeline is safe
     $files    = @($files)
     if (-not $files.Count) {
-        Write-Host 'Patch is empty. Skipping review.'
+        Write-Host "Patch is empty. Skipping review."
         return
     }
 
-    # Write-Host '::group::Raw $files'
+    # Write-Host "::group::Raw $files"
     # foreach ($f in $files) {
     #     $kind  = if ($f -is [pscustomobject]) { 'PSCustomObject' } else { $f.GetType().Name }
     #     $hasP  = $f -is [pscustomobject] -and $f.psobject.Properties['path']
     #     $text  = if ($hasP) { $f.path } else { '<no path>' }
     #     Write-Verbose ("{0,-15}  hasPath={1}  value={2}" -f $kind,$hasP,$text)
     # }
-    # Write-Host '::endgroup::'
+    # Write-Host "::endgroup::"
 
     $files = @($files)               # wrap null / scalar into an array
     if (-not $files) {               # still empty? -> nothing to review
-        Write-Host 'Patch is empty. Skipping review.'
+        Write-Host "Patch is empty. Skipping review."
         return
     }
 
-    Write-Host '::group::Files in patch'
+    Write-Host "::group::Files in patch"
     $files.path | ForEach-Object { Write-Host $_ }
-    Write-Host '::endgroup::'
+    Write-Host "::endgroup::"
 
     ############################################################################
-    # 4. Filter files by include/exclude patterns
+    # 4a. Filter files by include/exclude patterns
     ############################################################################
 
     # Pre-compile your globs into real WildcardPattern objects:
@@ -653,7 +696,7 @@ Process {
     )
 
     if (-not $relevant) {
-        Write-Host 'No relevant files to review'
+        Write-Host "No relevant files to review"
         return
     }
 
@@ -667,11 +710,40 @@ Process {
         $relevant = $relevant[0..($maxFiles - 1)]
     }
 
+    ############################################################################
+    # 4b.  Add changed files themselves as extra context (optional)
+    ############################################################################
+    $ctxFiles = @()
+    if ($IncludeChangedFilesAsContext) {
+        Write-Host "::group::Adding changed files as context"
+        $prFiles = Get-PRFiles -Owner $owner -Repo $repo -PrNumber $prNumber
+        foreach ($f in $prFiles) {
+            if ($f.status -eq 'removed') { continue }   # skip deleted files
+
+            $content = Get-FileContent -Owner $owner -Repo $repo `
+                                    -Path  $f.filename -RefSha $headRef
+            if ($content) {
+                $ctxFiles += [pscustomobject]@{
+                    path    = $f.filename
+                    content = $content
+                }
+                Write-Host "  + $($f.filename)"
+            }
+        }
+        Write-Host "::endgroup::"
+    }
+
+    # if ($ctxBytes -gt 500) {
+    #     Write-Warning "Context payload is $($ctxBytes/1KB) KB -> trimming oldest entries."
+    #     $ctxFiles = $ctxFiles |
+    #                 Sort-Object { $_.content.Length } -Descending |
+    #                 ForEach-Object -SkipWhile { ($ctxBytes -= $_.content.Length) -gt 500 }
+    # }
+
     ###########################################################################
     # 5. Autodetect app context
     ###########################################################################
 
-    $ctxFiles = @()
     if ($AutoDetectApps) {
         # 1) figure out where the checked-out repo lives
         $repoRoot    = $Env:GITHUB_WORKSPACE
@@ -680,7 +752,7 @@ Process {
         }
 
         # 2) enumerate all app.json in the repo
-        Write-Host '::group::Detect app structure & context'
+        Write-Host "::group::Detect app structure & context"
         $allAppJsons = Get-ChildItem -Path $repoRoot -Recurse -Filter 'app.json' |
                     ForEach-Object { $_.FullName.Replace('\','/') }
         Write-Host "Autodetect app structure. Relevant files = $($relevant.Count). Total apps = $($allAppJsons.Count)"
@@ -698,7 +770,7 @@ Process {
                 Write-Host "-> No app.json found for this file"
             }
         }
-        Write-Host '::endgroup::'
+        Write-Host "::endgroup::"
 
         # 4) now queue context files for each app.json we care about
         foreach ($appJson in $relevantApps.Keys) {
@@ -747,14 +819,14 @@ Process {
         'TransferFields'           = '\bTransferFields\s*\('
         'begin-as-an-afterword'    = '(?im)\b(?:then|else|do)\s*\r?\n\s*begin\b'
         'binary-operator-line-start' = '(?m)^[ \t]*(?:\+|-|\*|/|AND\b|OR\b|=)'
-        'comments-spacing'         = '//[^ ]'                                # “//No space”
+        'comments-spacing'         = '//[^ ]'                                # "//No space"
         'named-invocations'        = '\b(Page|Codeunit|Report|XmlPort|Query)\.Run(?:Modal)?\s*\(\s*\d+\s*,'
         'unnecessary-truefalse'    = '(?i)\b(?:not\s+\w+\s*)?=\s*(true|false)'
         'unnecessary-else'         = '\belse\s+(?:Error|Exit|Break|Skip|Quit)\('
         'istemporary-table-safeguard' = '\bDeleteAll\s*\('                   # same trigger as DeleteAll
         'if-not-find-then-exit'    = '\bFind(Set|First|Last)?\([^\)]*\)\s*then\b(?![^\r\n]*exit)'
         'lonely-repeat'            = '\brepeat\b.*'                          # very loose
-        'one-statement-per-line'   = '(?m);[ \t]+\w'                            # “; somethingElse”
+        'one-statement-per-line'   = '(?m);[ \t]+\w'                            # "; somethingElse"
         'spacing-binary-operators' = '(?<! )(\+|-|\*|/|=|<>|<|>)(?! )'
         'variable-naming'          = '(?m)^\+\s*".+?"\s*:'
     }
@@ -794,9 +866,9 @@ Process {
 
         # convert git diff to al code
         $norm = Convert-PatchToCode -Patch $patch
-        # Write-Host '::group::Git diff (normalized)'
+        # Write-Host "::group::Git diff (normalized)"
         # Write-Host $norm.Text
-        # Write-Host '::endgroup::'
+        # Write-Host "::endgroup::"
         $triggers = Get-TriggeredGuidelines -Patch $norm.Text
 
         foreach ($hit in $triggers) {
@@ -840,10 +912,10 @@ Process {
 
     ############################################################################
     # 6. Gather linked issues
-    ############################################################################
+    ############################################################################    
     $issueCtx = @()
 
-    # a) IDs found in the PR body description (“#123”)
+    # a) IDs found in the PR body description ("#123")
     # b) IDs returned by the GraphQL helper
     $issueIds = @() 
     $issueIds += Get-PRLinkedIssues -Owner $owner -Repo $repo -PrNumber $prNumber
@@ -882,22 +954,41 @@ Process {
 
     $basePrompt = @"
 You are reviewing AL code for Microsoft Dynamics 365 Business Central.
+Your tasks:
+1. Assess code quality & AL best-practice adherence
+2. Detect potential bugs, edge cases, record-locking or concurrency issues
+3. Highlight performance considerations (filters, keys, FlowFields, etc.)
+4. Judge readability & maintainability
+5. Surface security concerns, especially permission/entitlement coverage
+
+Suggest improvements and explain your reasoning for each suggestion.
 
 $BasePromptExtra
 
 **When you answer:**
-* Provide **up to $maxInline concise inline comments** if you spot something worth improving.
-* If you find nothing, set `"comments": []`.
-* Keep acknowledgments short and neutral.
-* Output GitHub-flavoured Markdown inside `"comment"` fields only.
+* Provide **up to $maxInline concise inline comments** if you spot something worth improving. If more issues exist, aggregate the remainder in summary.
+* if nothing needs improvement, set `"comments": []`.
+* Output GitHub-flavoured Markdown inside `"comment"` fields only; everywhere else use plain text.
 * You must output **only** a single JSON object (no surrounding text).  
-* All JSON strings must be properly escaped so that they parse without error.  
+* Escape all JSON strings (quotes, backslashes) so the output parses cleanly.
 * Do not include markdown in "comments" fields
+
+**Do not add inline comments for anything you see only in `contextFiles`.**
+Inline `comments` **must** reference a `path` & `line` that exists in the
+numbered `files` diff above (see {path,line} pair that exists in the
+  `validLines` table provided in the request). Anything you see in contextFiles is read-only reference.
+Comments that don't match will be ignored.
 
 Focus exclusively on the code: naming, performance, events/trigger usage, filters,
 record locking, permission/entitlement changes, UI strings (tone & BC terminology).
 
-If a new object appears in code but not in any *.PermissionSet.al or .Entitlement.al, flag it.
+If a new AL object is introduced without a corresponding *.PermissionSet.al or *.Entitlement.al file:- add one inline comment per object and mention it in summary.
+
+Additional fields you receive:
+
+* **bcObjects**   - array of object metadata (type, id, name, sourceTable).
+* **richSnippets** - extended AL code blocks surrounding the changes.
+Use them for reasoning, don't quote them verbatim in comments.
 
 Respond **only** with a JSON object using **exactly** these keys:
 
@@ -907,6 +998,8 @@ Respond **only** with a JSON object using **exactly** these keys:
 "suggestedAction": "approve" | "request_changes" | "comment",
 "confidence"     : 0-1
 }
+
+Set "confidence" between 0 (no certainty) and 1 (absolute certainty).
 
 Example of an empty-but-valid result:
 
@@ -929,12 +1022,25 @@ Example of an empty-but-valid result:
         head        = $pr.head.sha
     }
 
-    # Build a number‑prefixed diff for each file
+    # Build a "validLines" whitelist:  { <path> = @(line1,line2,…) }
+    $validLines = @{}
+    foreach ($f in $relevant) {
+        $lines = foreach ($chunk in $f.chunks) {
+            foreach ($chg in $chunk.changes) {
+                if ($chg.ln2) {   # use head-side line numbers only
+                    [int]$chg.ln2
+                }
+            }
+        }
+        $validLines[$f.path] = $lines | Sort-Object -Unique
+    }
+
+    # Build a number-prefixed diff for each file
     $numberedFiles = foreach ($f in $relevant) {
         # collect each change line with its target line number.
         $lines = foreach ($chunk in $f.chunks) {
             foreach ($chg in $chunk.changes) {
-            # prefer the new‑file line number (ln2) if available, otherwise original (ln)
+            # prefer the new-file line number (ln2) if available, otherwise original (ln)
             $ln = if ($chg.ln2) { $chg.ln2 } elseif ($chg.ln) { $chg.ln } else { continue }
             # prefix: "<line> <content>". Like "42 +    AddedCode()"
             "$ln $($chg.content)"
@@ -954,6 +1060,7 @@ Example of an empty-but-valid result:
         @{
             type         = 'code_review'
             files        = $numberedFiles
+            validLines   = $validLines
             contextFiles = $ctxFiles
             pullRequest  = $pullObj
             issues       = $issueCtx
@@ -962,17 +1069,18 @@ Example of an empty-but-valid result:
                 projectContext = $ProjectContext
                 isUpdate       = [bool]$lastCommit
             }
+            changeSummary = $pr.title
         } | ConvertTo-Json -Depth 6
         )
     }
     )
 
     $promptJson = $messages | ConvertTo-Json -Depth 8
-    Write-Host '::group::Final prompt (JSON)'
+    Write-Host "::group::Final prompt (JSON)"
     Write-Host ($promptJson | ConvertTo-Json -Compress)
-    Write-Host '::endgroup::'
+    Write-Host "::endgroup::"
 
-    Write-Host 'Calling API Endpoint...'
+    Write-Host "Calling API Endpoint..."
     $resp = Invoke-OpenAIChat -Messages $messages
 
     if ($resp -and $resp.PSObject.Properties.Name -contains 'usage') {
@@ -994,7 +1102,7 @@ Example of an empty-but-valid result:
     Write-Host "[DEBUG] Model returned: "
     Write-Host $raw
 
-    # Model is nice and provides regex snippets (which break the json) -> sanitize any “\x” sequences where x != one of the valid JSON escapes
+    # Model is nice and provides regex snippets (which break the json) -> sanitize any "\x" sequences where x != one of the valid JSON escapes
     # Finds any single backslash that is not immediately followed by ", \, /, b, f, n, r, t or u, and doubles it.
     # This turns \s into \\s (which JSON then interprets as the literal characters \ + s) without touching \n or \".
     $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
@@ -1009,13 +1117,50 @@ Example of an empty-but-valid result:
     ########################################################################
 
     # Build inline comment objects
-    $inline = foreach ($c in $review.comments) {
-        [pscustomobject]@{
-            path = $c.path
-            line = [int]$c.line
-            side = 'RIGHT'
-            body = $c.comment
+    $validLines = @{}
+    $relevant | ForEach-Object {
+        $validLines[$_.path] = @($_.chunks.changes |
+            Where-Object ln2 | ForEach-Object ln2)   # head-side line numbers
+    }
+
+    $sideMap    = @{}            # remembers whether a line is on LEFT or RIGHT
+
+    foreach ($f in $relevant) {
+        $lines   = @()
+        $sides   = @{}
+        foreach ($chunk in $f.chunks) {
+            foreach ($chg in $chunk.changes) {
+                if ($chg.type -eq 'add') {          # added line  -> RIGHT / ln2
+                    $lines += [int]$chg.ln2
+                    $sides[$chg.ln2] = 'RIGHT'
+                }
+                elseif ($chg.type -eq 'del') {      # deleted line -> LEFT / ln
+                    $lines += [int]$chg.ln
+                    $sides[$chg.ln ] = 'LEFT'
+                }
+            }
         }
+        $validLines[$f.path] = $lines | Sort-Object -Unique
+        $sideMap[$f.path] = $sides
+    }
+
+    $inline = @(
+        foreach ($c in $review.comments) {
+            $side = $sideMap[$c.path][$c.line]
+            if ($side) {
+                [pscustomobject]@{
+                    path = $c.path
+                    line = [int]$c.line
+                    side = $side         # LEFT for deletions, RIGHT otherwise
+                    body = $c.comment
+                }
+            }
+        }
+    )
+
+    # Early-exit if nothing survived
+    if (-not $inline) {
+        Write-Warning 'AI produced no valid inline comments; summary-only review will be posted.'
     }
 
     # Enforce overall cap
@@ -1030,24 +1175,66 @@ Example of an empty-but-valid result:
     # 9. Create review
     ########################################################################
 
+    function Post-TimelineComment {
+        param([string]$Body)
+        Invoke-GitHub -Method POST `
+            -Path "/repos/$owner/$repo/issues/$prNumber/comments" `
+            -Body @{ body = $Body }
+    }
+
     try {
-        # 1. create the review (summary only)
+        # first attempt: summary + inline comments
         $reviewResponse = New-Review
-        $url = $reviewResponse.html_url
-        Write-Host "Review posted: $url"
-    } catch {
-        Write-Warning "Submitting review failed: $_"
+        Write-Host "Review (with inlines) posted: $($reviewResponse.html_url)"
+
+    }
+    catch {
+        $err      = $_
+        $errMsg   = if ($err.ErrorDetails) {
+                        $err.ErrorDetails.Message
+                    } else {
+                        $err.Exception.Message
+                    }
+
+        if ($errMsg -match 'Pull request review thread line must be part of the diff') {
+            Write-Warning 'Inline positions rejected by GitHub - falling back to summary-only review.'
+
+            try {
+                $inline = @()                  # summary-only retry
+                $reviewResponse = New-Review
+                Write-Host "Summary-only review posted: $($reviewResponse.html_url)"
+            }
+            catch {
+                Write-Error "Even summary-only review failed: $($_.Exception.Message)"
+                throw
+            }
+
+            # ship the lost inline notes as a timeline comment
+            if ($inlineOrig = $review.comments) {
+                $md = $inlineOrig |
+                    ForEach-Object { "* **$($_.path):$($_.line)** – $($_.comment)" } |
+                    Out-String
+                Post-TimelineComment -Body (
+                    "Additional remarks:`n`n$md"
+                )
+                Write-Host "Inline remarks posted as timeline comment."
+            }
+        }
+        else {
+            Write-Error "Submitting review failed: $errMsg"
+            throw
+        }
     }
 
     Write-Host "Review complete for PR #$prNumber"
     }
 
 End {
-    Write-Host 'Invoke-AICodeReview finished.'
+    Write-Host "Invoke-AICodeReview finished."
 }
 }
 
-# Auto‑invoke when the script is executed directly
+# Auto-invoke when the script is executed directly
 if ($MyInvocation.InvocationName -notin @('.', 'source')) {
     Invoke-AICodeReview @PSBoundParameters
     return
