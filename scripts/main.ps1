@@ -466,11 +466,11 @@ closingIssuesReferences(first: 50) {
             [string]$BaseSha,
             [string]$HeadSha
         )
-        # The compare‑commits endpoint supports raw‑diff if you ask for it:
+        # The compare-commits endpoint supports raw-diff if you ask for it:
         #   GET /repos/:owner/:repo/compare/:base...:head
         #   Accept: application/vnd.github.diff
         #
-        # It already contains the per‑file headers that parse‑diff expects.
+        # It already contains the per-file headers that parse-diff expects.
         Invoke-GitHub `
             -Path  "/repos/$Owner/$Repo/compare/$BaseSha...$HeadSha" `
             -Accept 'application/vnd.github.diff'
@@ -623,7 +623,7 @@ Process {
     }
 
 
-    # Guard‑rail first -> abort early if diff is huge
+    # Guard-rail first -> abort early if diff is huge
     $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
     $maxBytes = 500KB
     if ($byteSize -gt $maxBytes) {
@@ -954,16 +954,23 @@ Process {
 
     $basePrompt = @"
 You are reviewing AL code for Microsoft Dynamics 365 Business Central.
+Your tasks:
+1. Assess code quality & AL best-practice adherence
+2. Detect potential bugs, edge cases, record-locking or concurrency issues
+3. Highlight performance considerations (filters, keys, FlowFields, etc.)
+4. Judge readability & maintainability
+5. Surface security concerns, especially permission/entitlement coverage
+
+Suggest improvements and explain your reasoning for each suggestion.
 
 $BasePromptExtra
 
 **When you answer:**
-* Provide **up to $maxInline concise inline comments** if you spot something worth improving.
-* If you find nothing, set `"comments": []`.
-* Keep acknowledgments short and neutral.
-* Output GitHub-flavoured Markdown inside `"comment"` fields only.
+* Provide **up to $maxInline concise inline comments** if you spot something worth improving. If more issues exist, aggregate the remainder in summary.
+* f nothing needs improvement, set `"comments": []`.
+* Output GitHub-flavoured Markdown inside `"comment"` fields only; everywhere else use plain text.
 * You must output **only** a single JSON object (no surrounding text).  
-* All JSON strings must be properly escaped so that they parse without error.  
+* Escape all JSON strings (quotes, backslashes) so the output parses cleanly.
 * Do not include markdown in "comments" fields
 
 **Do not add inline comments for anything you see only in `contextFiles`.**
@@ -975,7 +982,7 @@ Comments that don't match will be ignored.
 Focus exclusively on the code: naming, performance, events/trigger usage, filters,
 record locking, permission/entitlement changes, UI strings (tone & BC terminology).
 
-If a new object appears in code but not in any *.PermissionSet.al or .Entitlement.al, flag it.
+If a new AL object is introduced without a corresponding *.PermissionSet.al or *.Entitlement.al file:- add one inline comment per object and mention it in summary.
 
 Additional fields you receive:
 
@@ -991,6 +998,8 @@ Respond **only** with a JSON object using **exactly** these keys:
 "suggestedAction": "approve" | "request_changes" | "comment",
 "confidence"     : 0-1
 }
+
+Set "confidence" between 0 (no certainty) and 1 (absolute certainty).
 
 Example of an empty-but-valid result:
 
@@ -1018,7 +1027,7 @@ Example of an empty-but-valid result:
     foreach ($f in $relevant) {
         $lines = foreach ($chunk in $f.chunks) {
             foreach ($chg in $chunk.changes) {
-                if ($chg.ln2) {   # use head‑side line numbers only
+                if ($chg.ln2) {   # use head-side line numbers only
                     [int]$chg.ln2
                 }
             }
@@ -1026,12 +1035,12 @@ Example of an empty-but-valid result:
         $validLines[$f.path] = $lines | Sort-Object -Unique
     }
 
-    # Build a number‑prefixed diff for each file
+    # Build a number-prefixed diff for each file
     $numberedFiles = foreach ($f in $relevant) {
         # collect each change line with its target line number.
         $lines = foreach ($chunk in $f.chunks) {
             foreach ($chg in $chunk.changes) {
-            # prefer the new‑file line number (ln2) if available, otherwise original (ln)
+            # prefer the new-file line number (ln2) if available, otherwise original (ln)
             $ln = if ($chg.ln2) { $chg.ln2 } elseif ($chg.ln) { $chg.ln } else { continue }
             # prefix: "<line> <content>". Like "42 +    AddedCode()"
             "$ln $($chg.content)"
@@ -1111,7 +1120,7 @@ Example of an empty-but-valid result:
     $validLines = @{}
     $relevant | ForEach-Object {
         $validLines[$_.path] = @($_.chunks.changes |
-            Where-Object ln2 | ForEach-Object ln2)   # head‑side line numbers
+            Where-Object ln2 | ForEach-Object ln2)   # head-side line numbers
     }
 
     $sideMap    = @{}            # remembers whether a line is on LEFT or RIGHT
@@ -1149,9 +1158,9 @@ Example of an empty-but-valid result:
         }
     )
 
-    # Early‑exit if nothing survived
+    # Early-exit if nothing survived
     if (-not $inline) {
-        Write-Warning 'AI produced no valid inline comments; summary‑only review will be posted.'
+        Write-Warning 'AI produced no valid inline comments; summary-only review will be posted.'
     }
 
     # Enforce overall cap
@@ -1225,7 +1234,7 @@ End {
 }
 }
 
-# Auto‑invoke when the script is executed directly
+# Auto-invoke when the script is executed directly
 if ($MyInvocation.InvocationName -notin @('.', 'source')) {
     Invoke-AICodeReview @PSBoundParameters
     return
