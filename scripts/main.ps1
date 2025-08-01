@@ -967,7 +967,7 @@ $BasePromptExtra
 
 **When you answer:**
 * Provide **up to $maxInline concise inline comments** if you spot something worth improving. If more issues exist, aggregate the remainder in summary.
-* f nothing needs improvement, set `"comments": []`.
+* if nothing needs improvement, set `"comments": []`.
 * Output GitHub-flavoured Markdown inside `"comment"` fields only; everywhere else use plain text.
 * You must output **only** a single JSON object (no surrounding text).  
 * Escape all JSON strings (quotes, backslashes) so the output parses cleanly.
