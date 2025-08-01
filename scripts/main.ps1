@@ -248,7 +248,7 @@ repository(owner:$owner, name:$repo) {
 pullRequest(number:$pr) {
 body
 closingIssuesReferences(first: 50) {
-    nodes { number }         # issues closed by “Fixes/Closes #123”
+    nodes { number }         # issues closed by "Fixes/Closes #123"
 }
 }
 }
@@ -271,7 +271,7 @@ closingIssuesReferences(first: 50) {
         $prNode   = $resp.data.repository.pullRequest
         $closing  = @($prNode.closingIssuesReferences.nodes | ForEach-Object number)
 
-        # fallback: plain “#123” mentions in the PR body 
+        # fallback: plain "#123" mentions in the PR body 
         $mentioned = ([regex]'#(?<n>\d+)\b').Matches($prNode.body) |
                     ForEach-Object { [int]$_.Groups['n'].Value }
 
@@ -477,7 +477,7 @@ closingIssuesReferences(first: 50) {
     }
 
     ############################################################################
-    # Helper: get raw text of a file (HEAD version) – returns $null for binaries
+    # Helper: get raw text of a file (HEAD version) - returns $null for binaries
     ############################################################################
     function Get-FileContent {
         param(
@@ -634,33 +634,33 @@ Process {
     $scriptJs = Join-Path $PSScriptRoot 'parse-diff.js'
     $files    = $patch | node $scriptJs | ConvertFrom-Json
 
-    # Write-Host '::endgroup::'
+    # Write-Host "::endgroup::"
     
     # turn empty/null into an array so the rest of the pipeline is safe
     $files    = @($files)
     if (-not $files.Count) {
-        Write-Host 'Patch is empty. Skipping review.'
+        Write-Host "Patch is empty. Skipping review."
         return
     }
 
-    # Write-Host '::group::Raw $files'
+    # Write-Host "::group::Raw $files"
     # foreach ($f in $files) {
     #     $kind  = if ($f -is [pscustomobject]) { 'PSCustomObject' } else { $f.GetType().Name }
     #     $hasP  = $f -is [pscustomobject] -and $f.psobject.Properties['path']
     #     $text  = if ($hasP) { $f.path } else { '<no path>' }
     #     Write-Verbose ("{0,-15}  hasPath={1}  value={2}" -f $kind,$hasP,$text)
     # }
-    # Write-Host '::endgroup::'
+    # Write-Host "::endgroup::"
 
     $files = @($files)               # wrap null / scalar into an array
     if (-not $files) {               # still empty? -> nothing to review
-        Write-Host 'Patch is empty. Skipping review.'
+        Write-Host "Patch is empty. Skipping review."
         return
     }
 
-    Write-Host '::group::Files in patch'
+    Write-Host "::group::Files in patch"
     $files.path | ForEach-Object { Write-Host $_ }
-    Write-Host '::endgroup::'
+    Write-Host "::endgroup::"
 
     ############################################################################
     # 4a. Filter files by include/exclude patterns
@@ -696,7 +696,7 @@ Process {
     )
 
     if (-not $relevant) {
-        Write-Host 'No relevant files to review'
+        Write-Host "No relevant files to review"
         return
     }
 
@@ -715,7 +715,7 @@ Process {
     ############################################################################
     $ctxFiles = @()
     if ($IncludeChangedFilesAsContext) {
-        Write-Host '::group::Adding changed files as context'
+        Write-Host "::group::Adding changed files as context"
         $prFiles = Get-PRFiles -Owner $owner -Repo $repo -PrNumber $prNumber
         foreach ($f in $prFiles) {
             if ($f.status -eq 'removed') { continue }   # skip deleted files
@@ -730,7 +730,7 @@ Process {
                 Write-Host "  + $($f.filename)"
             }
         }
-        Write-Host '::endgroup::'
+        Write-Host "::endgroup::"
     }
 
     # $ctxBytes = ($ctxFiles | Measure-Object -Property content -Character).Characters 
@@ -753,7 +753,7 @@ Process {
         }
 
         # 2) enumerate all app.json in the repo
-        Write-Host '::group::Detect app structure & context'
+        Write-Host "::group::Detect app structure & context"
         $allAppJsons = Get-ChildItem -Path $repoRoot -Recurse -Filter 'app.json' |
                     ForEach-Object { $_.FullName.Replace('\','/') }
         Write-Host "Autodetect app structure. Relevant files = $($relevant.Count). Total apps = $($allAppJsons.Count)"
@@ -771,7 +771,7 @@ Process {
                 Write-Host "-> No app.json found for this file"
             }
         }
-        Write-Host '::endgroup::'
+        Write-Host "::endgroup::"
 
         # 4) now queue context files for each app.json we care about
         foreach ($appJson in $relevantApps.Keys) {
@@ -820,14 +820,14 @@ Process {
         'TransferFields'           = '\bTransferFields\s*\('
         'begin-as-an-afterword'    = '(?im)\b(?:then|else|do)\s*\r?\n\s*begin\b'
         'binary-operator-line-start' = '(?m)^[ \t]*(?:\+|-|\*|/|AND\b|OR\b|=)'
-        'comments-spacing'         = '//[^ ]'                                # “//No space”
+        'comments-spacing'         = '//[^ ]'                                # "//No space"
         'named-invocations'        = '\b(Page|Codeunit|Report|XmlPort|Query)\.Run(?:Modal)?\s*\(\s*\d+\s*,'
         'unnecessary-truefalse'    = '(?i)\b(?:not\s+\w+\s*)?=\s*(true|false)'
         'unnecessary-else'         = '\belse\s+(?:Error|Exit|Break|Skip|Quit)\('
         'istemporary-table-safeguard' = '\bDeleteAll\s*\('                   # same trigger as DeleteAll
         'if-not-find-then-exit'    = '\bFind(Set|First|Last)?\([^\)]*\)\s*then\b(?![^\r\n]*exit)'
         'lonely-repeat'            = '\brepeat\b.*'                          # very loose
-        'one-statement-per-line'   = '(?m);[ \t]+\w'                            # “; somethingElse”
+        'one-statement-per-line'   = '(?m);[ \t]+\w'                            # "; somethingElse"
         'spacing-binary-operators' = '(?<! )(\+|-|\*|/|=|<>|<|>)(?! )'
         'variable-naming'          = '(?m)^\+\s*".+?"\s*:'
     }
@@ -867,9 +867,9 @@ Process {
 
         # convert git diff to al code
         $norm = Convert-PatchToCode -Patch $patch
-        # Write-Host '::group::Git diff (normalized)'
+        # Write-Host "::group::Git diff (normalized)"
         # Write-Host $norm.Text
-        # Write-Host '::endgroup::'
+        # Write-Host "::endgroup::"
         $triggers = Get-TriggeredGuidelines -Patch $norm.Text
 
         foreach ($hit in $triggers) {
@@ -916,7 +916,7 @@ Process {
     ############################################################################    
     $issueCtx = @()
 
-    # a) IDs found in the PR body description (“#123”)
+    # a) IDs found in the PR body description ("#123")
     # b) IDs returned by the GraphQL helper
     $issueIds = @() 
     $issueIds += Get-PRLinkedIssues -Owner $owner -Repo $repo -PrNumber $prNumber
@@ -1068,11 +1068,11 @@ Example of an empty-but-valid result:
     )
 
     $promptJson = $messages | ConvertTo-Json -Depth 8
-    Write-Host '::group::Final prompt (JSON)'
+    Write-Host "::group::Final prompt (JSON)"
     Write-Host ($promptJson | ConvertTo-Json -Compress)
-    Write-Host '::endgroup::'
+    Write-Host "::endgroup::"
 
-    Write-Host 'Calling API Endpoint...'
+    Write-Host "Calling API Endpoint..."
     $resp = Invoke-OpenAIChat -Messages $messages
 
     if ($resp -and $resp.PSObject.Properties.Name -contains 'usage') {
@@ -1094,7 +1094,7 @@ Example of an empty-but-valid result:
     Write-Host "[DEBUG] Model returned: "
     Write-Host $raw
 
-    # Model is nice and provides regex snippets (which break the json) -> sanitize any “\x” sequences where x != one of the valid JSON escapes
+    # Model is nice and provides regex snippets (which break the json) -> sanitize any "\x" sequences where x != one of the valid JSON escapes
     # Finds any single backslash that is not immediately followed by ", \, /, b, f, n, r, t or u, and doubles it.
     # This turns \s into \\s (which JSON then interprets as the literal characters \ + s) without touching \n or \".
     $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
@@ -1169,20 +1169,57 @@ Example of an empty-but-valid result:
     # 9. Create review
     ########################################################################
 
+    function Post-TimelineComment {
+        param([string]$Body)
+        Invoke-GitHub -Method POST `
+            -Path "/repos/$owner/$repo/issues/$prNumber/comments" `
+            -Body @{ body = $Body }
+    }
+
     try {
-        # 1. create the review (summary only)
+        # first attempt: summary + inline comments
         $reviewResponse = New-Review
-        $url = $reviewResponse.html_url
-        Write-Host "Review posted: $url"
-    } catch {
-        Write-Warning "Submitting review failed: $_"
+        Write-Host "Review (with inlines) posted: $($reviewResponse.html_url)"
+
+    }
+    catch {
+        # did we hit the "line must be part of the diff" error?
+        if ($_.ErrorDetails.Message -match 'Pull request review thread line must be part of the diff') {
+            Write-Warning 'Inline positions rejected by GitHub - falling back to summary-only review.'
+
+            # 1) retry with *summary only*
+            try {
+                $inline = @()          # empty array → summary-only review
+                $reviewResponse = New-Review
+                Write-Host "Summary-only review posted: $($reviewResponse.html_url)"
+            }
+            catch {
+                Write-Error "Even summary-only review failed: $_"
+                throw
+            }
+
+            # 2) ship the lost inline comments as a single timeline comment
+            if ($inlineOrig = $review.comments) {
+                $md = $inlineOrig |
+                    ForEach-Object {
+                        "* **$($_.path):$($_.line)** - $($_.comment)"
+                    } | Out-String
+                Post-TimelineComment -Body ("The following remarks could not be posted inline (GitHub API limitation):`n`n$md")
+                Write-Host "Inline remarks posted as timeline comment."
+            }
+        }
+        else {
+            # some *other* failure → bubble up
+            Write-Error "Submitting review failed: $_"
+            throw
+        }
     }
 
     Write-Host "Review complete for PR #$prNumber"
     }
 
 End {
-    Write-Host 'Invoke-AICodeReview finished.'
+    Write-Host "Invoke-AICodeReview finished."
 }
 }
 
