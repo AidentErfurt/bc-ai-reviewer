@@ -1183,34 +1183,39 @@ Example of an empty-but-valid result:
 
     }
     catch {
-        # did we hit the "line must be part of the diff" error?
-        if ($_.ErrorDetails.Message -match 'Pull request review thread line must be part of the diff') {
+        $err      = $_
+        $errMsg   = if ($err.ErrorDetails) {
+                        $err.ErrorDetails.Message
+                    } else {
+                        $err.Exception.Message
+                    }
+
+        if ($errMsg -match 'Pull request review thread line must be part of the diff') {
             Write-Warning 'Inline positions rejected by GitHub - falling back to summary-only review.'
 
-            # 1) retry with *summary only*
             try {
-                $inline = @()          # empty array → summary-only review
+                $inline = @()                  # summary-only retry
                 $reviewResponse = New-Review
                 Write-Host "Summary-only review posted: $($reviewResponse.html_url)"
             }
             catch {
-                Write-Error "Even summary-only review failed: $_"
+                Write-Error "Even summary-only review failed: $($_.Exception.Message)"
                 throw
             }
 
-            # 2) ship the lost inline comments as a single timeline comment
+            # ship the lost inline notes as a timeline comment
             if ($inlineOrig = $review.comments) {
                 $md = $inlineOrig |
-                    ForEach-Object {
-                        "* **$($_.path):$($_.line)** - $($_.comment)"
-                    } | Out-String
-                Post-TimelineComment -Body ("The following remarks could not be posted inline (GitHub API limitation):`n`n$md")
+                    ForEach-Object { "* **$($_.path):$($_.line)** – $($_.comment)" } |
+                    Out-String
+                Post-TimelineComment -Body (
+                    "The following remarks could not be posted inline (GitHub API limitation):`n`n$md"
+                )
                 Write-Host "Inline remarks posted as timeline comment."
             }
         }
         else {
-            # some *other* failure → bubble up
-            Write-Error "Submitting review failed: $_"
+            Write-Error "Submitting review failed: $errMsg"
             throw
         }
     }
