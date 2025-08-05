@@ -950,7 +950,7 @@ Process {
     ############################################################################
     # 7. Build AI prompt & call AI
     ############################################################################
-    $maxInline = if ($MaxComments -gt 0) { $MaxComments } else { 10 }
+    $maxInline = if ($MaxComments -gt 0) { $MaxComments } else { 1000 }
 
     $basePrompt = @"
 You are reviewing AL code for Microsoft Dynamics 365 Business Central.
@@ -1131,13 +1131,24 @@ Example of an empty-but-valid result:
         $sides   = @{}
         foreach ($chunk in $f.chunks) {
             foreach ($chg in $chunk.changes) {
-                if ($chg.type -eq 'add') {          # added line  -> RIGHT / ln2
-                    $lines += [int]$chg.ln2
-                    $sides[$chg.ln2] = 'RIGHT'
-                }
-                elseif ($chg.type -eq 'del') {      # deleted line -> LEFT / ln
-                    $lines += [int]$chg.ln
-                    $sides[$chg.ln ] = 'LEFT'
+                switch ($chg.type) {
+                    'add'   {            # added line  -> RIGHT  / ln2
+                        $ln = [int]$chg.ln2
+                        $lines += $ln
+                        $sides[$ln] = 'RIGHT'
+                    }
+                    'del'   {            # deleted line -> LEFT  / ln
+                        $ln = [int]$chg.ln
+                        $lines += $ln  
+                        $sides[$ln] = 'LEFT'
+                    }
+                    default {            # unchanged context line -> commentable on RIGHT
+                        if ($chg.ln2) {
+                            $ln = [int]$chg.ln2
+                            $lines += $ln   
+                            $sides[$ln] = 'RIGHT'
+                        }
+                    }
                 }
             }
         }
@@ -1202,6 +1213,14 @@ Example of an empty-but-valid result:
         if ($errMsg -match 'Pull request review thread line must be part of the diff') {
             Write-Warning 'Inline positions rejected by GitHub - falling back to summary-only review.'
 
+            # Add the orphaned inline remarks to the summary itself
+            if ($inlineOrig = $review.comments) {
+                $extras = $inlineOrig | ForEach-Object {
+                    "* **$($_.path):$($_.line)** - $($_.comment)"
+                } | Out-String
+                $review.summary += "`n`n### Additional remarks:`n$extras"
+            }
+
             try {
                 $inline = @()                  # summary-only retry
                 $reviewResponse = New-Review
@@ -1210,17 +1229,6 @@ Example of an empty-but-valid result:
             catch {
                 Write-Error "Even summary-only review failed: $($_.Exception.Message)"
                 throw
-            }
-
-            # ship the lost inline notes as a timeline comment
-            if ($inlineOrig = $review.comments) {
-                $md = $inlineOrig |
-                    ForEach-Object { "* **$($_.path):$($_.line)** – $($_.comment)" } |
-                    Out-String
-                Post-TimelineComment -Body (
-                    "Additional remarks:`n`n$md"
-                )
-                Write-Host "Inline remarks posted as timeline comment."
             }
         }
         else {
