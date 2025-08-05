@@ -1131,13 +1131,24 @@ Example of an empty-but-valid result:
         $sides   = @{}
         foreach ($chunk in $f.chunks) {
             foreach ($chg in $chunk.changes) {
-                if ($chg.type -eq 'add') {          # added line  -> RIGHT / ln2
-                    $lines += [int]$chg.ln2
-                    $sides[$chg.ln2] = 'RIGHT'
-                }
-                elseif ($chg.type -eq 'del') {      # deleted line -> LEFT / ln
-                    $lines += [int]$chg.ln
-                    $sides[$chg.ln ] = 'LEFT'
+                switch ($chg.type) {
+                    'add'   {            # added line  -> RIGHT  / ln2
+                        $ln = [int]$chg.ln2
+                        $lines += $ln
+                        $sides[$ln] = 'RIGHT'
+                    }
+                    'del'   {            # deleted line -> LEFT  / ln
+                        $ln = [int]$chg.ln
+                        $lines += $ln  
+                        $sides[$ln] = 'LEFT'
+                    }
+                    default {            # unchanged context line -> commentable on RIGHT
+                        if ($chg.ln2) {
+                            $ln = [int]$chg.ln2
+                            $lines += $ln   
+                            $sides[$ln] = 'RIGHT'
+                        }
+                    }
                 }
             }
         }
@@ -1167,7 +1178,7 @@ Example of an empty-but-valid result:
     }
 
     # Enforce overall cap
-    if ($inline.Count -gt $MaxComments) {
+    if ($MaxComments -gt 0 -and $inline.Count -gt $MaxComments) {
         Write-Host "Truncating inline comments: showing only first $MaxComments of $($inline.Count)"
         $inline = $inline[0..($MaxComments - 1)]
     } else {
