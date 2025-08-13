@@ -40,7 +40,7 @@ inputs:
   AZURE_API_VERSION:
     description: "Azure OpenAI API version"
     type: string
-    default: "2024-05-01-preview"
+    default: "2025-01-01-preview"
 
   # Review behaviour
   APPROVE_REVIEWS:
