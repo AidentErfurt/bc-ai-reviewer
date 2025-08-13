@@ -167,6 +167,8 @@ runs:
           IncludeAppMarkdown    = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
           BasePromptExtra    = '${{ inputs.BASE_PROMPT_EXTRA }}'
           GuidelineRulesPath = '${{ inputs.GUIDELINE_RULES_PATH }}'
+          DisableGuidelineDocs    = [switch]::new([bool]::Parse('${{ inputs.DISABLE_GUIDELINEDOCS }}'))
+          IncludeChangedFilesAsContext = [bool]::Parse('${{ inputs.INCLUDE_CHANGED_FILE_AS_CONTEXT }}')
         }
         if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true')  { $p.ApproveReviews  = $true }
         if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }

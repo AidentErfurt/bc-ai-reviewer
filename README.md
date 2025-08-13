@@ -39,6 +39,7 @@ The action fetches the PR diff, optional context files, and any referenced issue
 | `INCLUDE_APP_MARKDOWN`    | no                                                 | `true`                       | If auto-detect is on, include `*.md` files from each app.                                     |
 | `GUIDELINE_RULES_PATH`    | no                                                 | `""`                         | Path to a JSON or PSD1 file defining **custom AL-Guideline rules**.                           |
 | `DISABLE_GUIDELINEDOCS`   | no                                                 | `false`                      | Skip downloading the official Microsoft *AL Guidelines* docs.                                 |
+| `INCLUDE_CHANGED_FILE_AS_CONTEXT`   | no                                                 | `false`                      | Ship every file that is touched by the PR to the LLM as an extra context file.                                 |
 
 ## 🛠 How it works
 
