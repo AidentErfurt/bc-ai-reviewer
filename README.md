@@ -1,8 +1,6 @@
 # Aident Business Central AI Code Reviewer
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Self-Test](https://github.com/AidentErfurt/bc-ai-reviewer/actions/workflows/self-test.yml/badge.svg)](https://github.com/AidentErfurt/bc-reviewer/actions/workflows/self-test.yml)
-
 
 Run an **AI-powered, Business Central-specific code review** on every pull request using **OpenAI**, **Azure OpenAI** *or* **OpenRouter.ai**.
 The action fetches the PR diff, optional context files, and any referenced issues, sends them to the LLM, then posts a summary review and granular inline comments right on the PR.
@@ -25,7 +23,7 @@ The action fetches the PR diff, optional context files, and any referenced issue
 | `AI_API_KEY`              | only when `AI_PROVIDER` = `openai` \| `openrouter` | –                            | Public OpenAI key or OpenRouter key.                                                          |
 | `AZURE_ENDPOINT`          | only when `AI_PROVIDER` = `azure`                  | –                            | Your Azure OpenAI endpoint URL.                                                               |
 | `AZURE_API_KEY`           | only when `AI_PROVIDER` = `azure`                  | –                            | Azure OpenAI key.                                                                             |
-| `AZURE_API_VERSION`       | no                                                 | `2024-05-01-preview`         | Azure REST API version.                                                                       |
+| `AZURE_API_VERSION`       | no                                                 | `2025-01-01-preview`         | Azure REST API version.                                                                       |
 | `MAX_COMMENTS`            | no                                                 | `10`                         | Hard cap for inline comments (`0` = unlimited).                                               |
 | `BASE_PROMPT_EXTRA`       | no                                                 | `""`                         | Extra text injected into the **system prompt** *before* the fixed JSON-response instructions. |
 | `PROJECT_CONTEXT`         | no                                                 | `""`                         | Free-form architectural or guideline notes shown to the model.                                |

@@ -26,10 +26,10 @@ limitations under the License.
     Personal Access Token with repo scope.
 
 .PARAMETER Provider
-    AI provider: 'openai' or 'azure'. Default 'openai'.
+    AI provider: 'openai' or 'azure'. Default 'azure'.
 
 .PARAMETER Model
-    Deployment or model name. Default 'gpt-4o-mini'.
+    Deployment or model name. Default 'o3-mini'.
 
 .PARAMETER ApiKey
     OPENAI_API_KEY (required when Provider is 'openai').
@@ -41,7 +41,7 @@ limitations under the License.
     Azure OpenAI API key (required when Provider is 'azure').
 
 .PARAMETER AzureApiVersion
-    Azure OpenAI API version. Default '2024-05-01-preview'.
+    Azure OpenAI API version. Default '2025-01-01-preview'.
 
 .PARAMETER ApproveReviews
     Switch. Approve or request changes instead of only commenting.
@@ -53,7 +53,7 @@ limitations under the License.
     Free-form architecture or guidelines.
 
 .PARAMETER ContextFiles
-    Comma-separated list of file globs to always fetch. Default 'README.md'.
+    Comma-separated list of file globs to always fetch.
 
 .PARAMETER IncludePatterns
     Comma-separated glob patterns of files to include in diff. Default '**/*.al,**/*.xlf,**/*.json'.
@@ -129,7 +129,7 @@ function Invoke-AICodeReview {
         [ValidateNotNullOrEmpty()]
         [string]$AzureApiKey,
 
-        [string]$AzureApiVersion = '2024-05-01-preview',
+        [string]$AzureApiVersion = '2025-01-01-preview',
 
         # -----------------------------------------------------------------------
         [switch]$ApproveReviews,
@@ -160,6 +160,27 @@ Begin {
     ############################################################################
     # Helpers
     ############################################################################
+
+    ############################################################################
+    # Helper: retry + backoff
+    ############################################################################
+    function Invoke-WithRetry {
+        param(
+            [scriptblock]$Script,
+            [int]$MaxAttempts = 5,
+            [int]$BaseDelayMs = 500
+        )
+        for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+            try { return & $Script }
+            catch {
+                $isLast = $attempt -eq $MaxAttempts
+                $status = $_.Exception.Response.StatusCode.value__
+                if ($isLast -or ($status -lt 500 -and $status -ne 429)) { throw }
+                Start-Sleep -Milliseconds ([int]([math]::Pow(2,$attempt-1) * $BaseDelayMs))
+            }
+        }
+    }
+
     ############################################################################
     # Helper: Call OpenAI / Azure OpenAI / OpenRouter
     ############################################################################
@@ -172,17 +193,31 @@ Begin {
         } 
         elseif ($Provider -eq 'openrouter') {
             $uri = 'https://openrouter.ai/api/v1/chat/completions'   # OpenRouter base URL :contentReference[oaicite:0]{index=0}
-            $hdr = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json' }
+            $hdr = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json'; 'User-Agent'='bc-ai-reviewer' }
             if ($OpenRouterReferer) { $hdr.'HTTP-Referer' = $OpenRouterReferer }
             if ($OpenRouterTitle)   { $hdr.'X-Title'      = $OpenRouterTitle }
         }
         else {
-            $uri = 'https://api.openai.com/v1/chat/completions'
+            # For OpenAI, use Responses API for o*-family; Chat for others
+            $useResponses = ($Model -match '^o[0-9]')   # e.g. o3-mini
+            $uri = if ($useResponses) {
+                'https://api.openai.com/v1/responses'
+            } else {
+                'https://api.openai.com/v1/chat/completions'
+            }
             $hdr = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json' }
         }
-        $body = @{
-            messages   = $Messages
-            model      = $Model
+        $body = if ($Provider -eq 'openai' -and $uri -like '*/responses') {
+            @{
+                model = $Model
+                input = $Messages
+                response_format = @{ type = 'json_object' }
+            }
+        } else {
+            @{
+                messages   = $Messages
+                model      = $Model
+            }
         }
         #TODO
         # temperature = 0.2
@@ -200,7 +235,7 @@ Begin {
         Write-Host ""
 
         try {
-            Invoke-RestMethod -Method POST -Uri $uri -Headers $hdr -Body ($body | ConvertTo-Json -Depth 5)
+            Invoke-WithRetry { Invoke-RestMethod -Method POST -Uri $uri -Headers $hdr -Body ($body | ConvertTo-Json -Depth 8) }
         } catch {
             Write-Error "OpenAI call failed: $_"
             throw
@@ -227,7 +262,7 @@ Begin {
         }
         if ($Body) { $Body = $Body | ConvertTo-Json -Depth 100 }
         try {
-            Invoke-RestMethod -Method $Method -Uri $uri -Headers $hdr -Body $Body
+            Invoke-WithRetry { Invoke-RestMethod -Method $Method -Uri $uri -Headers $hdr -Body $Body }
         } catch {
             Write-Error "GitHub API call failed ($Method $Path): $_"
             throw
@@ -402,7 +437,8 @@ closingIssuesReferences(first: 50) {
         # walk up the directory tree until we hit repo root
         $dir = Split-Path $Path -Parent
         while ($dir) {
-            $app = $AllApps | Where-Object { $_ -eq (Join-Path $dir 'app.json') }
+        $target = (Join-Path $dir 'app.json').Replace('\','/')
+        $app    = $AllApps | Where-Object { $_ -eq $target }
             if ($app) { return $app }                 # first hit wins (closest to root)
             $parent = Split-Path $dir -Parent
             if ($parent -eq $dir) { break }           # reached FS root
@@ -436,15 +472,11 @@ closingIssuesReferences(first: 50) {
             [Parameter(Mandatory)][string]$Raw,
             [int]$MaxAttempts = 5
         )
-
-        # 1) kill BOM / zero-width space and control chars that JSON cannot swallow
+        # 1) remove BOM/ZWSP and non-JSON control chars
         $json = $Raw.TrimStart([char]0xFEFF, [char]0x200B)
         $json = $json -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
-
-        # escape single back-slashes that aren't part of a legal sequence
+        # 2) escape stray backslashes
         $badBackslash = [regex]'(?<!\\)\\(?![\\/"bfnrtu]|u[0-9a-fA-F]{4})'
-        $json = $Raw
-
         for ($try = 1; $try -le $MaxAttempts; $try++) {
             try { return $json | ConvertFrom-Json }
             catch {
@@ -452,7 +484,6 @@ closingIssuesReferences(first: 50) {
                 Write-Verbose "Retry #$try - escaped stray back-slash or cleaned control chars"
             }
         }
-
         throw "Failed to sanitise AI response after $MaxAttempts attempts."
     }
 
@@ -627,12 +658,16 @@ Process {
     $byteSize = [System.Text.Encoding]::UTF8.GetByteCount($patch)
     $maxBytes = 500KB
     if ($byteSize -gt $maxBytes) {
-        throw "The generated diff is $($byteSize) bytes (> $maxBytes). Conside using INCLUDE_PATTERNS/EXCLUDE_PATTERNS."
+        throw "The generated diff is $($byteSize) bytes (> $maxBytes). Consider using INCLUDE_PATTERNS/EXCLUDE_PATTERNS."
     }
 
-    # Parse with **parse-diff** via NodeJS
+    # Parse with parse-diff via NodeJS
     $scriptJs = Join-Path $PSScriptRoot 'parse-diff.js'
-    $files    = $patch | node $scriptJs | ConvertFrom-Json
+    $pdOut    = $patch | node $scriptJs 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "parse-diff failed with exit code $LASTEXITCODE `n$pdOut"
+    }
+    $files    = $pdOut | ConvertFrom-Json
 
     # Write-Host "::endgroup::"
     
@@ -828,7 +863,7 @@ Process {
         'lonely-repeat'            = '\brepeat\b.*'                          # very loose
         'one-statement-per-line'   = '(?m);[ \t]+\w'                            # "; somethingElse"
         'spacing-binary-operators' = '(?<! )(\+|-|\*|/|=|<>|<|>)(?! )'
-        'variable-naming'          = '(?m)^\+\s*".+?"\s*:'
+        'variable-naming'          = '(?m)^\s*".+?"\s*:'
     }
 
     # 1) Load custom file if supplied. Overrides built-ins and auto-discover.
@@ -969,10 +1004,9 @@ $BasePromptExtra
 * Open with one or two sentences that **acknowledge what looks good** (clarity, structure, test coverage, etc.).
 * Provide **up to $maxInline concise inline comments** if you spot something worth improving. If more issues exist, aggregate the remainder in summary.
 * if nothing needs improvement, set `"comments": []`.
-* Output GitHub-flavoured Markdown inside `"comment"` fields only; everywhere else use plain text.
-* You must output **only** a single JSON object (no surrounding text).  
+* Output GitHub-flavoured Markdown **inside** `"comment"` fields **only**; everywhere else use plain text.
+* You must output **only** a single JSON object (no surrounding text, no code fences).
 * Escape all JSON strings (quotes, backslashes) so the output parses cleanly.
-* Do not include markdown in "comments" fields
 
 **Do not add inline comments for anything you see only in `contextFiles`.**
 Inline `comments` **must** reference a `path` & `line` that exists in the
@@ -1078,7 +1112,7 @@ Example of an empty-but-valid result:
 
     $promptJson = $messages | ConvertTo-Json -Depth 8
     Write-Host "::group::Final prompt (JSON)"
-    Write-Host ($promptJson | ConvertTo-Json -Compress)
+    Write-Host $promptJson
     Write-Host "::endgroup::"
 
     Write-Host "Calling API Endpoint..."
@@ -1093,12 +1127,20 @@ Example of an empty-but-valid result:
         Write-Host "No token-usage info returned by provider."
     }
 
-    $raw    = $resp.choices[0].message.content.Trim() -replace '^```json','' -replace '```$',''
-    if (-not $resp -or -not $resp.choices -or -not $resp.choices.Count) {
-        $msg = "Azure OpenAI returned no choices:`n$(($resp | ConvertTo-Json -Depth 6))"
-        Write-Error $msg
-        return      # or   throw $msg
+    # Extract text for Chat or Responses API
+    $raw = $null
+    if ($resp.PSObject.Properties.Name -contains 'choices') {
+        $raw = $resp.choices[0].message.content
+    } elseif ($resp.PSObject.Properties.Name -contains 'output') {
+        $raw = ($resp.output[0].content | Where-Object type -eq 'output_text')[0].text
     }
+    if ($raw) { $raw = $raw.Trim() -replace '^```json','' -replace '```$','' }
+
+    if (-not $resp -or -not $raw) {
+         $msg = "AI provider returned no content:`n$(($resp | ConvertTo-Json -Depth 6))"
+         Write-Error $msg
+         return      # or   throw $msg
+     }
 
     Write-Host "[DEBUG] Model returned: "
     Write-Host $raw
