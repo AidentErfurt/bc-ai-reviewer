@@ -205,32 +205,39 @@ Begin {
         # Build primary + fallback endpoints/headers/body per provider
         switch ($Provider) {
             'azure' {
-                $endpointNorm = $AzureEndpoint.TrimEnd('/')
-                $endpointNorm = $endpointNorm -replace '/openai$', ''   # strip accidental '/'
-                $base = "$endpointNorm/openai/deployments/$Model"
+                # Normalize endpoint
+                $endpointNorm = ($AzureEndpoint ?? '').TrimEnd('/')
+                $endpointNorm = $endpointNorm -replace '/openai$', ''   # strip accidental '/openai'
 
-                # prove the deployment exists
+                # Fixed deployment path and URIs
+                $deploymentPath = "$endpointNorm/openai/deployments/$Model"
+                $probeUri       = "$deploymentPath?api-version=$AzureApiVersion"          # always defined
+                $primaryUri     = if ($isReasoningish) { "$deploymentPath/responses?api-version=$AzureApiVersion" }
+                                else { "$deploymentPath/chat/completions?api-version=$AzureApiVersion" }
+                $fallbackUri    = "$deploymentPath/chat/completions?api-version=$AzureApiVersion"
+                $hdr            = @{ 'api-key' = $AzureApiKey; 'Content-Type' = 'application/json' }
+
+                Write-Verbose "Azure endpoint (normalized): $endpointNorm"
+                Write-Verbose "Deployment path: $deploymentPath"
+                Write-Verbose "Probe URI: $probeUri"
+
+                # Quick existence probe (cheap GET)
                 try {
-                    $probeUri = "$endpointNorm/openai/deployments/$Model?api-version=$AzureApiVersion"
-                    $null = Invoke-RestMethod -Method GET -Uri $probeUri -Headers @{ 'api-key' = $AzureApiKey }
+                    $null = Invoke-RestMethod -Method GET -Uri $probeUri -Headers $hdr
                 } catch {
-                    Write-Error "Deployment probe failed for '$Model' at $probeUri : $($_.Exception.Message)"
-                    if ($_.ErrorDetails) { Write-Host $_.ErrorDetails.Message }
+                    $em = if ($_.ErrorDetails) { $_.ErrorDetails.Message } else { $_.Exception.Message }
+                    Write-Error "Deployment probe failed for '$Model' at $probeUri : $em"
                     throw
                 }
 
-                $primaryUri   = if ($isReasoningish) { "$base/responses?api-version=$AzureApiVersion" } else { "$base/chat/completions?api-version=$AzureApiVersion" }
-                $fallbackUri  = "$base/chat/completions?api-version=$AzureApiVersion"
-                $hdr          = @{ 'api-key' = $AzureApiKey; 'Content-Type' = 'application/json' }
-
-                # Bodies
+                # Request bodies
                 $bodyResponses = @{
-                    model = $Model    # Azure ignores this but harmless
+                    model = $Model            # harmless; Azure uses deployment from URL
                     input = $Messages
                     response_format = @{ type = 'json_object' }
                 }
                 if ($isReasoningish -and $ReasoningEffort) {
-                    $bodyResponses.reasoning = @{ effort = $ReasoningEffort } # hint; ignored by non-reasoning models
+                    $bodyResponses.reasoning = @{ effort = $ReasoningEffort }
                 }
 
                 $bodyChat = @{
