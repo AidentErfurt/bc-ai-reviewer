@@ -211,10 +211,10 @@ Begin {
 
                 # Fixed deployment path and URIs
                 $deploymentPath = "$endpointNorm/openai/deployments/$Model"
-                $probeUri       = "$deploymentPath?api-version=$AzureApiVersion"          # always defined
-                $primaryUri     = if ($isReasoningish) { "$deploymentPath/responses?api-version=$AzureApiVersion" }
-                                else { "$deploymentPath/chat/completions?api-version=$AzureApiVersion" }
-                $fallbackUri    = "$deploymentPath/chat/completions?api-version=$AzureApiVersion"
+                $probeUri       = "${deploymentPath}?api-version=$AzureApiVersion"
+                $primaryUri     = if ($isReasoningish) { "${deploymentPath}/responses?api-version=$AzureApiVersion" }
+                                else { "${deploymentPath}/chat/completions?api-version=$AzureApiVersion" }
+                $fallbackUri    = "${deploymentPath}/chat/completions?api-version=$AzureApiVersion"
                 $hdr            = @{ 'api-key' = $AzureApiKey; 'Content-Type' = 'application/json' }
 
                 Write-Verbose "Azure endpoint (normalized): $endpointNorm"
