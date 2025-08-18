@@ -217,9 +217,9 @@ Begin {
                 $fallbackUri    = "${deploymentPath}/chat/completions?api-version=$AzureApiVersion"
                 $hdr            = @{ 'api-key' = $AzureApiKey; 'Content-Type' = 'application/json' }
 
-                Write-Verbose "Azure endpoint (normalized): $endpointNorm"
-                Write-Verbose "Deployment path: $deploymentPath"
-                Write-Verbose "Probe URI: $probeUri"
+                Write-Host "Azure endpoint (normalized): $endpointNorm"
+                Write-Host "Deployment path: $deploymentPath"
+                Write-Host "Probe URI: $probeUri"
 
                 # Quick existence probe (cheap GET)
                 try {
