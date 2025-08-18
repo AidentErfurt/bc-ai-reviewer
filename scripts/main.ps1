@@ -29,7 +29,7 @@ limitations under the License.
     AI provider: 'openai' or 'azure'. Default 'azure'.
 
 .PARAMETER Model
-    Deployment or model name. Default 'o3-mini'.
+    AI_MODEL is the base model. For Azure, set AZURE_DEPLOYMENT to your deployment’s friendly name (falls back to AI_MODEL if omitted. Default 'o3-mini'.
 
 .PARAMETER ApiKey
     OPENAI_API_KEY (required when Provider is 'openai').
@@ -42,6 +42,9 @@ limitations under the License.
 
 .PARAMETER AzureApiVersion
     Azure OpenAI API version. Default '2025-01-01-preview'.
+
+.PARAMETER AzureDeployment
+    Azure OpenAI deployment name (friendly name you created in Azure).
 
 .PARAMETER ApproveReviews
     Switch. Approve or request changes instead of only commenting.
@@ -92,7 +95,10 @@ limitations under the License.
     Switch. Skip fetching AL-Guidelines docs.
 
 .PARAMETER IncludeChangedFilesAsContext
-    Ship every file that is touched by the PR to the LLM as an extra context file
+    Ship every file that is touched by the PR to the LLM as an extra context file.
+
+.PARAMETER LogPrompt
+    Log full prompt (diff + context) to runner logs.
 
 .EXAMPLE
     .\main.ps1 -GitHubToken $env:GITHUB_TOKEN -Provider azure -AzureEndpoint 'https://...' -ContextFiles 'README.md,docs/*.md'
@@ -113,6 +119,13 @@ function Invoke-AICodeReview {
 
         [string]$Model       = 'o3-mini',
 
+        # Prompt/policy tuning
+        [ValidateSet('auto','gpt5','generic')]
+        [string] $PromptStyle = 'auto',
+
+        [ValidateSet('low','medium','high')]
+        [string] $ReasoningEffort = 'medium',
+
         # --- OpenAI / OpenRouter (public) ----------------------------------------------------
         [Parameter(ParameterSetName='OpenAI', Mandatory)]
         [ValidateNotNullOrEmpty()]
@@ -130,6 +143,9 @@ function Invoke-AICodeReview {
         [string]$AzureApiKey,
 
         [string]$AzureApiVersion = '2025-01-01-preview',
+
+        [Parameter(ParameterSetName='Azure')]
+        [string]$AzureDeployment,
 
         # -----------------------------------------------------------------------
         [switch]$ApproveReviews,
@@ -150,7 +166,8 @@ function Invoke-AICodeReview {
         [string] $BasePromptExtra,
         [string] $GuidelineRulesPath = '',
         [switch] $DisableGuidelineDocs,
-        [bool] $IncludeChangedFilesAsContext = $false
+        [bool] $IncludeChangedFilesAsContext = $false,
+        [switch]$LogPrompt
     )
 
 Begin {
@@ -187,58 +204,106 @@ Begin {
     
     function Invoke-OpenAIChat {
         param([array]$Messages)
-        if ($Provider -eq 'azure') {
-            $uri = "$AzureEndpoint/openai/deployments/$Model/chat/completions?api-version=$AzureApiVersion"
-            $hdr = @{ 'api-key' = $AzureApiKey; 'Content-Type' = 'application/json' }
-        } 
-        elseif ($Provider -eq 'openrouter') {
-            $uri = 'https://openrouter.ai/api/v1/chat/completions'   # OpenRouter base URL :contentReference[oaicite:0]{index=0}
-            $hdr = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json'; 'User-Agent'='bc-ai-reviewer' }
-            if ($OpenRouterReferer) { $hdr.'HTTP-Referer' = $OpenRouterReferer }
-            if ($OpenRouterTitle)   { $hdr.'X-Title'      = $OpenRouterTitle }
-        }
-        else {
-            # For OpenAI, use Responses API for o*-family; Chat for others
-            $useResponses = ($Model -match '^o[0-9]')   # e.g. o3-mini
-            $uri = if ($useResponses) {
-                'https://api.openai.com/v1/responses'
-            } else {
-                'https://api.openai.com/v1/chat/completions'
-            }
-            $hdr = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json' }
-        }
-        $body = if ($Provider -eq 'openai' -and $uri -like '*/responses') {
-            @{
-                model = $Model
-                input = $Messages
-                response_format = @{ type = 'json_object' }
-            }
-        } else {
-            @{
-                messages   = $Messages
-                model      = $Model
-            }
-        }
-        #TODO
-        # temperature = 0.2
-        # top_p       = 0.8
-        # max_tokens  = 1024   # hard guardrail
 
-        # azure zure passes the model via the url
-        if ($Provider -in @('openai','openrouter')) { 
-            $body.model = $Model 
+        # Heuristics: when to prefer the Responses API
+        $isReasoningish = ($Model -match '^(?i)(o\d|gpt-?5)') -or ($PromptStyle -eq 'gpt5')
+
+        # Build primary + fallback endpoints/headers/body per provider
+        switch ($Provider) {
+            'azure' {
+                # Normalize endpoint
+                $endpointNorm = ($AzureEndpoint ?? '').TrimEnd('/')
+                $endpointNorm = $endpointNorm -replace '/openai$', ''   # strip accidental '/openai' etc.
+
+                # Prefer explicit deployment; fall back to Model (back-compat)
+                $deploymentName = if ($AzureDeployment) { $AzureDeployment } else { $Model }
+
+                # Deployment path + URIs
+                $deploymentPath = "$endpointNorm/openai/deployments/$deploymentName"
+                $primaryUri  = if ($isReasoningish) { "${deploymentPath}/responses?api-version=$AzureApiVersion" }
+                               else { "${deploymentPath}/chat/completions?api-version=$AzureApiVersion" }
+                $fallbackUri = "${deploymentPath}/chat/completions?api-version=$AzureApiVersion"
+                $hdr         = @{ 'api-key' = $AzureApiKey; 'Content-Type' = 'application/json' }
+
+                # Bodies (keep base model in body; Azure uses deployment from URL)
+                $bodyResponses = @{
+                    model = $Model
+                    input = $Messages
+                    response_format = @{ type = 'json_object' }
+                }
+                if ($isReasoningish -and $ReasoningEffort) {
+                    $bodyResponses.reasoning = @{ effort = $ReasoningEffort }
+                }
+
+                $bodyChat = @{
+                    model    = $Model
+                    messages = $Messages
+                }
+            }
+
+            'openrouter' {
+                # Chat Completions only
+                $primaryUri  = 'https://openrouter.ai/api/v1/chat/completions'
+                $fallbackUri = $primaryUri
+                $hdr = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json'; 'User-Agent'='bc-ai-reviewer' }
+                if ($OpenRouterReferer) { $hdr.'HTTP-Referer' = $OpenRouterReferer }
+                if ($OpenRouterTitle)   { $hdr.'X-Title'      = $OpenRouterTitle }
+
+                $bodyChat = @{ model = $Model; messages = $Messages }
+            }
+
+            default { # 'openai'
+                $primaryUri  = if ($isReasoningish) { 'https://api.openai.com/v1/responses' } else { 'https://api.openai.com/v1/chat/completions' }
+                $fallbackUri = 'https://api.openai.com/v1/chat/completions'
+                $hdr = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json' }
+
+                $bodyResponses = @{
+                    model = $Model
+                    input = $Messages
+                    response_format = @{ type = 'json_object' }
+                }
+                if ($isReasoningish -and $ReasoningEffort) {
+                    $bodyResponses.reasoning = @{ effort = $ReasoningEffort }
+                }
+
+                $bodyChat = @{
+                    model    = $Model
+                    messages = $Messages
+                }
+            }
         }
 
-        Write-Host "Provider: $Provider"
-        Write-Host "Endpoint: $uri"
-        Write-Host "Model:    $Model"
-        Write-Host ""
+        # Helper to POST
+        function Invoke-JsonPost([string]$uri,[hashtable]$hdr,[hashtable]$body) {
+            Invoke-WithRetry {
+                Invoke-RestMethod -Method POST -Uri $uri -Headers $hdr -Body ($body | ConvertTo-Json -Depth 10)
+            }
+        }
 
+        # Prefer Responses when we picked it, fall back to Chat if unsupported
+        $usingResponses = ($primaryUri -like '*/responses*')
         try {
-            Invoke-WithRetry { Invoke-RestMethod -Method POST -Uri $uri -Headers $hdr -Body ($body | ConvertTo-Json -Depth 8) }
-        } catch {
-            Write-Error "OpenAI call failed: $_"
-            throw
+            if ($usingResponses) {
+                Write-Host "Provider: $Provider`nEndpoint: $primaryUri`nModel: $Model (Responses API)"
+                return Invoke-JsonPost $primaryUri $hdr $bodyResponses
+            } else {
+                Write-Host "Provider: $Provider`nEndpoint: $primaryUri`nModel: $Model (Chat Completions)"
+                return Invoke-JsonPost $primaryUri $hdr $bodyChat
+            }
+        }
+        catch {
+                # Only attempt fallback when our primary was Responses and the error looks like an unsupported route/arg
+                $msg   = $_.Exception.Message
+                $code  = $_.Exception.Response.StatusCode.value__  # may be null for some failures
+                $looksUnsupported = $usingResponses -and ($code -in 400,404 -or $msg -match '(route|path).*(not found|unsupported|unknown)' -or $msg -match 'Unrecognized request argument.*input' -or $msg -match 'No such route'
+            )
+
+            if ($looksUnsupported -and $fallbackUri) {
+                Write-Warning "Responses API not available for this deployment/API version. Falling back to Chat Completions."
+                return Invoke-JsonPost $fallbackUri $hdr $bodyChat
+            }
+
+            throw  # real error; bubble up
         }
     }
 
@@ -258,7 +323,7 @@ Begin {
             Authorization          = "Bearer $GitHubToken"
             Accept                 = $Accept
             'X-GitHub-Api-Version' = '2022-11-28'
-            'User-Agent'           = 'ai-codereviewer-pwsh'
+            'User-Agent'           = 'bc-ai-reviewer'
         }
         if ($Body) { $Body = $Body | ConvertTo-Json -Depth 100 }
         try {
@@ -345,7 +410,7 @@ closingIssuesReferences(first: 50) {
             if ($raw.Length -eq 0) { continue }
 
             switch ($raw[0]) {
-                '-' { continue }                     # pure deletion -> ignore        }
+                '-' { continue }                     # pure deletion -> ignore
                 '+' { $line = $raw.Substring(1) }    # addition       -> keep w/o '+'
                 ' ' { $line = $raw.Substring(1) }    # context        -> keep
                 default { continue }                 # anything else  -> ignore
@@ -415,7 +480,7 @@ closingIssuesReferences(first: 50) {
         if (-not (Test-Path $file)) {
             $url = "https://raw.githubusercontent.com/microsoft/alguidelines/main/content/docs/BestPractices/$Folder/index.md"
             try {
-                $md = Invoke-RestMethod -Uri $url -Headers @{ 'Accept'='text/plain'; 'User-Agent'='al-reviewer' }
+                $md = Invoke-RestMethod -TimeoutSec 120 -Uri $url -Headers @{ 'Accept'='text/plain'; 'User-Agent'='al-reviewer' }
                 # strip YAML front-matter
                 $md = $md -replace '(?s)^---.*?---\s*'
                 $md | Set-Content $file -Encoding UTF8
@@ -551,6 +616,168 @@ closingIssuesReferences(first: 50) {
             $page++
         } while ($resp.Count -eq 100)
         return $all
+    }
+
+    ############################################################################
+    # Helper: Create prompt
+    ############################################################################
+    function Test-IsGpt5Prompt {
+        param([string]$Model,[string]$PromptStyle)
+        switch ($PromptStyle) {
+            'gpt5'    { return $true }
+            'generic' { return $false }
+            default   { return ($Model -match '^(?i)gpt-?5') }  # auto: infer from model/deployment name when possible
+        }
+    }
+
+    function New-BasePrompt {
+        param(
+            [int]    $MaxInline,
+            [string] $ProjectContext,
+            [string] $BasePromptExtra,
+            [bool]   $IsUpdate,
+            [bool]   $UseGpt5,
+            [string] $ReasoningEffort
+        )
+
+        if ($UseGpt5) {
+@"
+<code_review_task>
+  <role>AI reviewer for Microsoft Dynamics 365 Business Central repositories.</role>
+  <objectives>
+    - Assess code quality & AL best practices
+    - Find bugs / edge cases / locking or concurrency risks
+    - Call out performance concerns (filters, keys, FlowFields)
+    - Judge readability & maintainability
+    - Surface security gaps (permissions/entitlements)
+  </objectives>
+</code_review_task>
+
+<project_context>
+$ProjectContext
+</project_context>
+
+<guidance>
+  - Provide up to $MaxInline concise inline comments; aggregate overflow in the summary.
+  - If nothing needs improvement, set "comments": [].
+  - Use GitHub-flavoured Markdown only inside "comment" fields; plain text elsewhere.
+  - Do not rely on contextFiles for inline comments.
+  - Inline comments must reference a {path,line} present in the numbered diff and the validLines table.
+  - Focus on code (naming, performance, events/trigger usage, filters, record locking, UI strings).
+  - If a new AL object lacks a corresponding *.PermissionSet.al or *.Entitlement.al, add an inline and mention it in the summary.
+</guidance>
+
+<additional_inputs>
+  - bcObjects: metadata; use for reasoning only.
+  - richSnippets: extended AL blocks; do not quote verbatim.
+</additional_inputs>
+
+<reasoning_effort>$ReasoningEffort</reasoning_effort>
+
+<output_contract>
+  Respond with a single JSON object (no code fences) using exactly:
+  {
+    "summary"        : "<overall feedback - max 10 lines>",
+    "comments"       : [ { "path": "string", "line": number, "comment": "string (≤ 3 lines)" } ],
+    "suggestedAction": "approve" | "request_changes" | "comment",
+    "confidence"     : 0-1
+  }
+  Escape JSON strings (quotes, backslashes) correctly.
+</output_contract>
+
+<notes>
+$(
+    if ($IsUpdate) { 'Previous feedback already addressed can be omitted; focus on new changes.' } else { '' }
+)
+</notes>
+
+<extra>
+$BasePromptExtra
+</extra>
+"@
+        }
+        else {
+@"
+You are reviewing AL code for Microsoft Dynamics 365 Business Central.
+Your tasks:
+1. Assess code quality & AL best-practice adherence
+2. Detect potential bugs, edge cases, record-locking or concurrency issues
+3. Highlight performance considerations (filters, keys, FlowFields, etc.)
+4. Judge readability & maintainability
+5. Surface security concerns, especially permission/entitlement coverage
+
+Suggest improvements and explain your reasoning for each suggestion.
+
+$BasePromptExtra
+
+**When you answer:**
+* Open with one or two sentences that acknowledge what looks good.
+* Provide **up to $MaxInline concise inline comments**; aggregate any extra in the summary.
+* If nothing needs improvement, set `"comments": []`.
+* Output GitHub-flavoured Markdown **inside** `"comment"` fields **only**; plain text elsewhere.
+* You must output **only** a single JSON object (no surrounding text, no code fences).
+* Escape all JSON strings (quotes, backslashes) so the output parses cleanly.
+
+**Do not add inline comments for anything you see only in `contextFiles`.**
+Inline `comments` **must** reference a `path` & `line` that exists in the numbered `files` diff
+and the `validLines` table provided in the request. Comments that don't match will be ignored.
+
+Focus exclusively on the code: naming, performance, events/trigger usage, filters,
+record locking, permission/entitlement changes, UI strings (tone & BC terminology).
+
+If a new AL object is introduced without a corresponding *.PermissionSet.al or *.Entitlement.al file:
+- add one inline comment per object and mention it in summary.
+
+Additional fields you receive:
+* **bcObjects**   - array of object metadata (type, id, name, sourceTable).
+* **richSnippets** - extended AL code blocks surrounding the changes. Use them for reasoning, don't quote verbatim.
+
+Respond **only** with a JSON object using **exactly** these keys:
+
+{
+"summary"        : "<overall feedback - max 10 lines>",
+"comments"       : [ { "path": "string", "line": number, "comment": "string (≤ 3 lines)" } ],
+"suggestedAction": "approve" | "request_changes" | "comment",
+"confidence"     : 0-1
+}
+
+Set "confidence" between 0 (no certainty) and 1 (absolute certainty).
+$(
+    if ($IsUpdate) { "`nPrevious feedback already addressed can be omitted; focus on new changes." } else { "" }
+)
+"@
+        }
+    }
+
+    ############################################################################
+    # Helper: Responses extraction
+    ############################################################################
+    function Get-AssistantText {
+        param($resp)
+
+        # Chat Completions
+        if ($resp.PSObject.Properties.Name -contains 'choices' -and $resp.choices) {
+            return $resp.choices[0].message.content
+        }
+
+        # Responses API (several shapes)
+        if ($resp.PSObject.Properties.Name -contains 'output') {
+            $texts = @()
+            foreach ($o in @($resp.output)) {
+                if ($o.type -eq 'message' -and $o.content) {
+                    foreach ($c in @($o.content)) {
+                        if ($c.type -in @('text','output_text') -and $c.text) { $texts += $c.text }
+                    }
+                }
+            }
+            if ($texts.Count) { return ($texts -join "`n") }
+        }
+
+        # Some SDKs expose top-level
+        if ($resp.PSObject.Properties.Name -contains 'output_text' -and $resp.output_text) {
+            return $resp.output_text
+        }
+        return $null
     }
 
     ############################################################################
@@ -768,12 +995,15 @@ Process {
         Write-Host "::endgroup::"
     }
 
-    # if ($ctxBytes -gt 500) {
-    #     Write-Warning "Context payload is $($ctxBytes/1KB) KB -> trimming oldest entries."
-    #     $ctxFiles = $ctxFiles |
-    #                 Sort-Object { $_.content.Length } -Descending |
-    #                 ForEach-Object -SkipWhile { ($ctxBytes -= $_.content.Length) -gt 500 }
-    # }
+    $ctxBytes = ($ctxFiles | ForEach-Object { $_.content.Length } | Measure-Object -Sum).Sum
+    $maxCtxBytes = 700KB
+    if ($ctxBytes -gt $maxCtxBytes) {
+        $ctxFiles = $ctxFiles | Sort-Object { $_.content.Length } -Descending
+        while ($ctxBytes -gt $maxCtxBytes -and $ctxFiles.Count) {
+            $ctxBytes -= $ctxFiles[-1].content.Length
+            $ctxFiles  = $ctxFiles[0..($ctxFiles.Count-2)]
+        }
+    }
 
     ###########################################################################
     # 5. Autodetect app context
@@ -881,7 +1111,7 @@ Process {
         # 2) Enumerate every folder under /BestPractices at run time.
         $apiUrl = 'https://api.github.com/repos/microsoft/alguidelines/contents/content/docs/BestPractices'
         try {
-            $dirList = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'al-reviewer' }
+            $dirList = Invoke-RestMethod -TimeoutSec 120 -Uri $apiUrl -Headers @{ 'User-Agent' = 'al-reviewer' }
         } catch {
             throw "Unable to enumerate guideline folders: $_"
         }
@@ -1110,10 +1340,13 @@ Example of an empty-but-valid result:
     }
     )
 
-    $promptJson = $messages | ConvertTo-Json -Depth 8
-    Write-Host "::group::Final prompt (JSON)"
-    Write-Host $promptJson
-    Write-Host "::endgroup::"
+    if ($LogPrompt) {
+        $promptJson = $messages | ConvertTo-Json -Depth 8
+        if ($promptJson.Length -gt 20000) { $promptJson = $promptJson.Substring(0,20000) + "`n...(truncated)" }
+        Write-Host "::group::Final prompt (JSON)"
+        Write-Host $promptJson
+        Write-Host "::endgroup::"
+    }
 
     Write-Host "Calling API Endpoint..."
     $resp = Invoke-OpenAIChat -Messages $messages
@@ -1129,11 +1362,30 @@ Example of an empty-but-valid result:
 
     # Extract text for Chat or Responses API
     $raw = $null
-    if ($resp.PSObject.Properties.Name -contains 'choices') {
+
+    # 1) Chat Completions
+    if ($resp.PSObject.Properties.Name -contains 'choices' -and $resp.choices.Count) {
         $raw = $resp.choices[0].message.content
-    } elseif ($resp.PSObject.Properties.Name -contains 'output') {
-        $raw = ($resp.output[0].content | Where-Object type -eq 'output_text')[0].text
     }
+
+    # 2) Responses API variants
+    if (-not $raw) {
+        # a) output_text (common)
+        if ($resp.PSObject.Properties.Name -contains 'output_text' -and $resp.output_text) {
+            $raw = $resp.output_text
+        }
+        # b) output[].content[] blocks
+        elseif ($resp.PSObject.Properties.Name -contains 'output' -and $resp.output.Count) {
+            $block = $resp.output[0].content | Where-Object { $_.type -eq 'output_text' -or $_.type -eq 'text' } | Select-Object -First 1
+            if ($block) { $raw = $block.text }
+        }
+        # c) content[].text (some preview payloads)
+        elseif ($resp.PSObject.Properties.Name -contains 'content' -and $resp.content.Count) {
+            $c0 = $resp.content[0]
+            if ($c0.PSObject.Properties.Name -contains 'text') { $raw = $c0.text }
+        }
+    }
+
     if ($raw) { $raw = $raw.Trim() -replace '^```json','' -replace '```$','' }
 
     if (-not $resp -or -not $raw) {
@@ -1151,7 +1403,12 @@ Example of an empty-but-valid result:
     $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
 
     $review = Convert-FromAiJson -Raw $raw
-    $review.summary += "`n`n------`n`nCode review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model."`
+    if ($Provider -eq 'azure') {
+        $dn = if ($AzureDeployment) { $AzureDeployment } else { $Model }
+        $review.summary += "`n`n------`n`nCode review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model (deployment: $dn)."
+    } else {
+        $review.summary += "`n`n------`n`nCode review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model."
+    }
     
     $review.summary += "`n<!-- ai-sha:$headRef -->"
 
@@ -1230,13 +1487,6 @@ Example of an empty-but-valid result:
     ########################################################################
     # 9. Create review
     ########################################################################
-
-    function Post-TimelineComment {
-        param([string]$Body)
-        Invoke-GitHub -Method POST `
-            -Path "/repos/$owner/$repo/issues/$prNumber/comments" `
-            -Body @{ body = $Body }
-    }
 
     try {
         # first attempt: summary + inline comments
