@@ -18,7 +18,7 @@ inputs:
     default: "azure"
 
   AI_MODEL:
-    description: "AI_MODEL is the base model. For Azure, set AZURE_DEPLOYMENT to your deployments friendly name (falls back to AI_MODEL if omitted"
+    description: "AI_MODEL is the base model. For Azure, set AZURE_DEPLOYMENT to your deployments friendly name (falls back to AI_MODEL if omitted)."
     type: string
     default: "o3-mini"
 
