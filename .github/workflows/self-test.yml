@@ -31,7 +31,7 @@ jobs:
           AZURE_ENDPOINT:      ${{ secrets.AZURE_ENDPOINT }}
           AZURE_API_KEY:       ${{ secrets.AZUREOPENAIKEYO3MINI }}
           AZURE_API_VERSION:  '2025-04-01-preview'
-          AI_MODEL:            o3-mini
+          AI_MODEL:            gpt-5
           MAX_COMMENTS:        10
           APPROVE_REVIEWS:     false
 
