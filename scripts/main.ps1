@@ -941,7 +941,7 @@ Process {
         Write-Host "::endgroup::"
     }
 
-    $ctxBytes = ($ctxFiles | Measure-Object -Property content -Sum).Sum
+    $ctxBytes = ($ctxFiles | ForEach-Object { $_.content.Length } | Measure-Object -Sum).Sum
     $maxCtxBytes = 700KB
     if ($ctxBytes -gt $maxCtxBytes) {
         $ctxFiles = $ctxFiles | Sort-Object { $_.content.Length } -Descending
