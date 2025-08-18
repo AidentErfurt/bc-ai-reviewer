@@ -1325,10 +1325,13 @@ Example of an empty-but-valid result:
     }
     )
 
-    $promptJson = $messages | ConvertTo-Json -Depth 8
-    Write-Host "::group::Final prompt (JSON)"
-    Write-Host $promptJson
-    Write-Host "::endgroup::"
+    if ($LogPrompt) {
+        $promptJson = $messages | ConvertTo-Json -Depth 8
+        if ($promptJson.Length -gt 20000) { $promptJson = $promptJson.Substring(0,20000) + "`n...(truncated)" }
+        Write-Host "::group::Final prompt (JSON)"
+        Write-Host $promptJson
+        Write-Host "::endgroup::"
+    }
 
     Write-Host "Calling API Endpoint..."
     $resp = Invoke-OpenAIChat -Messages $messages
