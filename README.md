@@ -19,7 +19,6 @@ The action fetches the PR diff, optional context files, and any referenced issue
 | ------------------------- | -------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
 | `GITHUB_TOKEN`            | **yes**                                            | –                            | Token with `contents:read`, `pull-requests:write`, `issues:read`.                         |
 | Name               | Required?                                   | Default              | Description                                                                                                  |
-|--------------------|---------------------------------------------|----------------------|--------------------------------------------------------------------------------------------------------------|
 | `AI_PROVIDER`      | no                                          | `azure`              | `openai` \| `azure` \| `openrouter`.                                                                         |
 | `AI_MODEL`         | no                                          | `o3-mini`            | **Base model name** (e.g., `gpt-5`, `o3-mini`). For Azure, this is the *base model* used in the request body.|
 | `AZURE_DEPLOYMENT` | only when `AI_PROVIDER` = `azure` (recommended) | –                  | **Azure deployment name** (the friendly name you created in Azure). If omitted, falls back to `AI_MODEL`.    |
