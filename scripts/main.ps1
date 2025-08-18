@@ -209,30 +209,20 @@ Begin {
                 $endpointNorm = ($AzureEndpoint ?? '').TrimEnd('/')
                 $endpointNorm = $endpointNorm -replace '/openai$', ''   # strip accidental '/openai'
 
-                # Fixed deployment path and URIs
+                # Deployment path + URIs
                 $deploymentPath = "$endpointNorm/openai/deployments/$Model"
-                $probeUri       = "${deploymentPath}?api-version=$AzureApiVersion"
-                $primaryUri     = if ($isReasoningish) { "${deploymentPath}/responses?api-version=$AzureApiVersion" }
-                                else { "${deploymentPath}/chat/completions?api-version=$AzureApiVersion" }
-                $fallbackUri    = "${deploymentPath}/chat/completions?api-version=$AzureApiVersion"
-                $hdr            = @{ 'api-key' = $AzureApiKey; 'Content-Type' = 'application/json' }
+                $primaryUri  = if ($isReasoningish) { "${deploymentPath}/responses?api-version=$AzureApiVersion" }
+                            else { "${deploymentPath}/chat/completions?api-version=$AzureApiVersion" }
+                $fallbackUri = "${deploymentPath}/chat/completions?api-version=$AzureApiVersion"
+                $hdr         = @{ 'api-key' = $AzureApiKey; 'Content-Type' = 'application/json' }
 
-                Write-Host "Azure endpoint (normalized): $endpointNorm"
-                Write-Host "Deployment path: $deploymentPath"
-                Write-Host "Probe URI: $probeUri"
+                Write-Host "Provider: azure"
+                Write-Host "Endpoint: $primaryUri"
+                Write-Host "Model: $Model$($isReasoningish ? ' (Responses API)' : ' (Chat Completions)')"
 
-                # Quick existence probe (cheap GET)
-                try {
-                    $null = Invoke-RestMethod -Method GET -Uri $probeUri -Headers $hdr
-                } catch {
-                    $em = if ($_.ErrorDetails) { $_.ErrorDetails.Message } else { $_.Exception.Message }
-                    Write-Error "Deployment probe failed for '$Model' at $probeUri : $em"
-                    throw
-                }
-
-                # Request bodies
+                # Bodies
                 $bodyResponses = @{
-                    model = $Model            # harmless; Azure uses deployment from URL
+                    model = $Model
                     input = $Messages
                     response_format = @{ type = 'json_object' }
                 }
