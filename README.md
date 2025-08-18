@@ -37,7 +37,11 @@ The action fetches the PR diff, optional context files, and any referenced issue
 | `INCLUDE_APP_MARKDOWN`    | no                                                 | `true`                       | If auto-detect is on, include `*.md` files from each app.                                     |
 | `GUIDELINE_RULES_PATH`    | no                                                 | `""`                         | Path to a JSON or PSD1 file defining **custom AL-Guideline rules**.                           |
 | `DISABLE_GUIDELINEDOCS`   | no                                                 | `false`                      | Skip downloading the official Microsoft *AL Guidelines* docs.                                 |
-| `INCLUDE_CHANGED_FILE_AS_CONTEXT`   | no                                                 | `false`                      | Ship every file that is touched by the PR to the LLM as an extra context file.                                 |
+| `INCLUDE_CHANGED_FILES_AS_CONTEXT`   | no                                                 | `false`                      | Ship every file that is touched by the PR to the LLM as an extra context file.                                 |
+| `PROMPT_STYLE`            | no                                                 | `auto`                      | `auto` = GPT-5 prompt when `AI_MODEL` matches `gpt-5*` (OpenAI **or** Azure); `gpt5` forces it; `generic` disables it.      |
+| `REASONING_EFFORT`        | no                                                 | `medium`                    | Hint for GPT-5 reasoning depth: `low` \| `medium` \| `high` (ignored by other models).                                       |
+| `LOG_PROMPT`        | no                                                 | `false`                    | Log full prompt (diff + context) to runner logs.                                       |
+
 
 ## 🛠 How it works
 
@@ -48,6 +52,9 @@ The action fetches the PR diff, optional context files, and any referenced issue
 5. Subsequent runs only re-review commits newer than the last bot review.
 
 ## 📦 Usage
+
+**GPT-5 prompt mode**  
+Set `PROMPT_STYLE: auto` (default). If `AI_MODEL` starts with `gpt-5` the action switches to the GPT-5-optimized, XML-structured prompt automatically—this works for both **OpenAI** and **Azure OpenAI** deployments. You can force it with `PROMPT_STYLE: gpt5` or disable with `PROMPT_STYLE: generic`. Optional `REASONING_EFFORT: high|medium|low` tunes GPT-5’s depth.
 
 ## Azure OpenAI - Example 1
 
@@ -90,8 +97,10 @@ jobs:
           AI_PROVIDER:       azure
           AZURE_ENDPOINT:    https://<your-resource>.openai.azure.com
           AZURE_API_KEY:     ${{ secrets.AZURE_OPENAI_KEY }}
-          AZURE_API_VERSION: 2025-01-01-preview
-          AI_MODEL:          o3-mini        # deployment name, not the base model
+          AZURE_API_VERSION: 2025-04-01-preview
+          AI_MODEL:          gpt-5          # deployment name, not the base model
+          PROMPT_STYLE: auto                # auto-detects gpt-5 and switches prompt style
+          REASONING_EFFORT: high
 
           # Review behaviour
           MAX_COMMENTS:      0              # unlimited inline comments

@@ -120,10 +120,25 @@ inputs:
     type: boolean
     default: false
 
-  INCLUDE_CHANGED_FILE_AS_CONTEXT:
+  INCLUDE_CHANGED_FILES_AS_CONTEXT:
     description: "Ship every file that is touched by the PR to the LLM as an extra context file"
     type: boolean
     default: false
+
+  PROMPT_STYLE:
+    description: "auto | gpt5 | generic - use GPT-5-optimized prompt when 'gpt-5*' model. 'generic' forces legacy prompt."
+    type: string
+    default: "auto"
+
+  REASONING_EFFORT:
+    description: "low | medium | high - hint for GPT-5 reasoning depth; ignored by other models."
+    type: string
+    default: "medium"
+  LOG_PROMPT:
+    description: "Log full prompt (diff + context) to runner logs"
+    type: boolean
+    default: false
+
 
 runs:
   using: composite
@@ -168,7 +183,10 @@ runs:
           BasePromptExtra    = '${{ inputs.BASE_PROMPT_EXTRA }}'
           GuidelineRulesPath = '${{ inputs.GUIDELINE_RULES_PATH }}'
           DisableGuidelineDocs    = [switch]::new([bool]::Parse('${{ inputs.DISABLE_GUIDELINEDOCS }}'))
-          IncludeChangedFilesAsContext = [bool]::Parse('${{ inputs.INCLUDE_CHANGED_FILE_AS_CONTEXT }}')
+          IncludeChangedFilesAsContext = [bool]::Parse('${{ inputs.INCLUDE_CHANGED_FILES_AS_CONTEXT }}')
+          PromptStyle        = '${{ inputs.PROMPT_STYLE }}'
+          ReasoningEffort    = '${{ inputs.REASONING_EFFORT }}'
+          LogPrompt = [switch]::new([bool]::Parse('${{ inputs.LOG_PROMPT }}'))
         }
         if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true')  { $p.ApproveReviews  = $true }
         if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }

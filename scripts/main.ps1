@@ -92,7 +92,10 @@ limitations under the License.
     Switch. Skip fetching AL-Guidelines docs.
 
 .PARAMETER IncludeChangedFilesAsContext
-    Ship every file that is touched by the PR to the LLM as an extra context file
+    Ship every file that is touched by the PR to the LLM as an extra context file.
+
+.PARAMETER LogPrompt
+    Log full prompt (diff + context) to runner logs.
 
 .EXAMPLE
     .\main.ps1 -GitHubToken $env:GITHUB_TOKEN -Provider azure -AzureEndpoint 'https://...' -ContextFiles 'README.md,docs/*.md'
@@ -112,6 +115,13 @@ function Invoke-AICodeReview {
         [string]$Provider = 'openai',
 
         [string]$Model       = 'o3-mini',
+
+        # Prompt/policy tuning
+        [ValidateSet('auto','gpt5','generic')]
+        [string] $PromptStyle = 'auto',
+
+        [ValidateSet('low','medium','high')]
+        [string] $ReasoningEffort = 'medium',
 
         # --- OpenAI / OpenRouter (public) ----------------------------------------------------
         [Parameter(ParameterSetName='OpenAI', Mandatory)]
@@ -150,7 +160,8 @@ function Invoke-AICodeReview {
         [string] $BasePromptExtra,
         [string] $GuidelineRulesPath = '',
         [switch] $DisableGuidelineDocs,
-        [bool] $IncludeChangedFilesAsContext = $false
+        [bool] $IncludeChangedFilesAsContext = $false,
+        [switch]$LogPrompt
     )
 
 Begin {
@@ -258,7 +269,7 @@ Begin {
             Authorization          = "Bearer $GitHubToken"
             Accept                 = $Accept
             'X-GitHub-Api-Version' = '2022-11-28'
-            'User-Agent'           = 'ai-codereviewer-pwsh'
+            'User-Agent'           = 'bc-ai-reviewer'
         }
         if ($Body) { $Body = $Body | ConvertTo-Json -Depth 100 }
         try {
@@ -345,7 +356,7 @@ closingIssuesReferences(first: 50) {
             if ($raw.Length -eq 0) { continue }
 
             switch ($raw[0]) {
-                '-' { continue }                     # pure deletion -> ignore        }
+                '-' { continue }                     # pure deletion -> ignore
                 '+' { $line = $raw.Substring(1) }    # addition       -> keep w/o '+'
                 ' ' { $line = $raw.Substring(1) }    # context        -> keep
                 default { continue }                 # anything else  -> ignore
@@ -415,7 +426,7 @@ closingIssuesReferences(first: 50) {
         if (-not (Test-Path $file)) {
             $url = "https://raw.githubusercontent.com/microsoft/alguidelines/main/content/docs/BestPractices/$Folder/index.md"
             try {
-                $md = Invoke-RestMethod -Uri $url -Headers @{ 'Accept'='text/plain'; 'User-Agent'='al-reviewer' }
+                $md = Invoke-RestMethod -TimeoutSec 120 -Uri $url -Headers @{ 'Accept'='text/plain'; 'User-Agent'='al-reviewer' }
                 # strip YAML front-matter
                 $md = $md -replace '(?s)^---.*?---\s*'
                 $md | Set-Content $file -Encoding UTF8
@@ -551,6 +562,168 @@ closingIssuesReferences(first: 50) {
             $page++
         } while ($resp.Count -eq 100)
         return $all
+    }
+
+    ############################################################################
+    # Helper: Create prompt
+    ############################################################################
+    function Test-IsGpt5Prompt {
+        param([string]$Model,[string]$PromptStyle)
+        switch ($PromptStyle) {
+            'gpt5'    { return $true }
+            'generic' { return $false }
+            default   { return ($Model -match '^(?i)gpt-?5') }  # auto: infer from model/deployment name when possible
+        }
+    }
+
+    function New-BasePrompt {
+        param(
+            [int]    $MaxInline,
+            [string] $ProjectContext,
+            [string] $BasePromptExtra,
+            [bool]   $IsUpdate,
+            [bool]   $UseGpt5,
+            [string] $ReasoningEffort
+        )
+
+        if ($UseGpt5) {
+@"
+<code_review_task>
+  <role>AI reviewer for Microsoft Dynamics 365 Business Central repositories.</role>
+  <objectives>
+    - Assess code quality & AL best practices
+    - Find bugs / edge cases / locking or concurrency risks
+    - Call out performance concerns (filters, keys, FlowFields)
+    - Judge readability & maintainability
+    - Surface security gaps (permissions/entitlements)
+  </objectives>
+</code_review_task>
+
+<project_context>
+$ProjectContext
+</project_context>
+
+<guidance>
+  - Provide up to $MaxInline concise inline comments; aggregate overflow in the summary.
+  - If nothing needs improvement, set "comments": [].
+  - Use GitHub-flavoured Markdown only inside "comment" fields; plain text elsewhere.
+  - Do not rely on contextFiles for inline comments.
+  - Inline comments must reference a {path,line} present in the numbered diff and the validLines table.
+  - Focus on code (naming, performance, events/trigger usage, filters, record locking, UI strings).
+  - If a new AL object lacks a corresponding *.PermissionSet.al or *.Entitlement.al, add an inline and mention it in the summary.
+</guidance>
+
+<additional_inputs>
+  - bcObjects: metadata; use for reasoning only.
+  - richSnippets: extended AL blocks; do not quote verbatim.
+</additional_inputs>
+
+<reasoning_effort>$ReasoningEffort</reasoning_effort>
+
+<output_contract>
+  Respond with a single JSON object (no code fences) using exactly:
+  {
+    "summary"        : "<overall feedback - max 10 lines>",
+    "comments"       : [ { "path": "string", "line": number, "comment": "string (≤ 3 lines)" } ],
+    "suggestedAction": "approve" | "request_changes" | "comment",
+    "confidence"     : 0-1
+  }
+  Escape JSON strings (quotes, backslashes) correctly.
+</output_contract>
+
+<notes>
+$(
+    if ($IsUpdate) { 'Previous feedback already addressed can be omitted; focus on new changes.' } else { '' }
+)
+</notes>
+
+<extra>
+$BasePromptExtra
+</extra>
+"@
+        }
+        else {
+@"
+You are reviewing AL code for Microsoft Dynamics 365 Business Central.
+Your tasks:
+1. Assess code quality & AL best-practice adherence
+2. Detect potential bugs, edge cases, record-locking or concurrency issues
+3. Highlight performance considerations (filters, keys, FlowFields, etc.)
+4. Judge readability & maintainability
+5. Surface security concerns, especially permission/entitlement coverage
+
+Suggest improvements and explain your reasoning for each suggestion.
+
+$BasePromptExtra
+
+**When you answer:**
+* Open with one or two sentences that acknowledge what looks good.
+* Provide **up to $MaxInline concise inline comments**; aggregate any extra in the summary.
+* If nothing needs improvement, set `"comments": []`.
+* Output GitHub-flavoured Markdown **inside** `"comment"` fields **only**; plain text elsewhere.
+* You must output **only** a single JSON object (no surrounding text, no code fences).
+* Escape all JSON strings (quotes, backslashes) so the output parses cleanly.
+
+**Do not add inline comments for anything you see only in `contextFiles`.**
+Inline `comments` **must** reference a `path` & `line` that exists in the numbered `files` diff
+and the `validLines` table provided in the request. Comments that don't match will be ignored.
+
+Focus exclusively on the code: naming, performance, events/trigger usage, filters,
+record locking, permission/entitlement changes, UI strings (tone & BC terminology).
+
+If a new AL object is introduced without a corresponding *.PermissionSet.al or *.Entitlement.al file:
+- add one inline comment per object and mention it in summary.
+
+Additional fields you receive:
+* **bcObjects**   - array of object metadata (type, id, name, sourceTable).
+* **richSnippets** - extended AL code blocks surrounding the changes. Use them for reasoning, don't quote verbatim.
+
+Respond **only** with a JSON object using **exactly** these keys:
+
+{
+"summary"        : "<overall feedback - max 10 lines>",
+"comments"       : [ { "path": "string", "line": number, "comment": "string (≤ 3 lines)" } ],
+"suggestedAction": "approve" | "request_changes" | "comment",
+"confidence"     : 0-1
+}
+
+Set "confidence" between 0 (no certainty) and 1 (absolute certainty).
+$(
+    if ($IsUpdate) { "`nPrevious feedback already addressed can be omitted; focus on new changes." } else { "" }
+)
+"@
+        }
+    }
+
+    ############################################################################
+    # Helper: Responses extraction
+    ############################################################################
+    function Get-AssistantText {
+        param($resp)
+
+        # Chat Completions
+        if ($resp.PSObject.Properties.Name -contains 'choices' -and $resp.choices) {
+            return $resp.choices[0].message.content
+        }
+
+        # Responses API (several shapes)
+        if ($resp.PSObject.Properties.Name -contains 'output') {
+            $texts = @()
+            foreach ($o in @($resp.output)) {
+                if ($o.type -eq 'message' -and $o.content) {
+                    foreach ($c in @($o.content)) {
+                        if ($c.type -in @('text','output_text') -and $c.text) { $texts += $c.text }
+                    }
+                }
+            }
+            if ($texts.Count) { return ($texts -join "`n") }
+        }
+
+        # Some SDKs expose top-level
+        if ($resp.PSObject.Properties.Name -contains 'output_text' -and $resp.output_text) {
+            return $resp.output_text
+        }
+        return $null
     }
 
     ############################################################################
@@ -768,12 +941,15 @@ Process {
         Write-Host "::endgroup::"
     }
 
-    # if ($ctxBytes -gt 500) {
-    #     Write-Warning "Context payload is $($ctxBytes/1KB) KB -> trimming oldest entries."
-    #     $ctxFiles = $ctxFiles |
-    #                 Sort-Object { $_.content.Length } -Descending |
-    #                 ForEach-Object -SkipWhile { ($ctxBytes -= $_.content.Length) -gt 500 }
-    # }
+    $ctxBytes = ($ctxFiles | Measure-Object -Property content -Sum).Sum
+    $maxCtxBytes = 700KB
+    if ($ctxBytes -gt $maxCtxBytes) {
+        $ctxFiles = $ctxFiles | Sort-Object { $_.content.Length } -Descending
+        while ($ctxBytes -gt $maxCtxBytes -and $ctxFiles.Count) {
+            $ctxBytes -= $ctxFiles[-1].content.Length
+            $ctxFiles  = $ctxFiles[0..($ctxFiles.Count-2)]
+        }
+    }
 
     ###########################################################################
     # 5. Autodetect app context
@@ -881,7 +1057,7 @@ Process {
         # 2) Enumerate every folder under /BestPractices at run time.
         $apiUrl = 'https://api.github.com/repos/microsoft/alguidelines/contents/content/docs/BestPractices'
         try {
-            $dirList = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'al-reviewer' }
+            $dirList = Invoke-RestMethod -TimeoutSec 120 -Uri $apiUrl -Headers @{ 'User-Agent' = 'al-reviewer' }
         } catch {
             throw "Unable to enumerate guideline folders: $_"
         }
@@ -1151,7 +1327,7 @@ Example of an empty-but-valid result:
     $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
 
     $review = Convert-FromAiJson -Raw $raw
-    $review.summary += "`n`n------`n`nCode review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model."`
+    $review.summary += "`n`n------`n`nCode review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model."
     
     $review.summary += "`n<!-- ai-sha:$headRef -->"
 
@@ -1230,13 +1406,6 @@ Example of an empty-but-valid result:
     ########################################################################
     # 9. Create review
     ########################################################################
-
-    function Post-TimelineComment {
-        param([string]$Body)
-        Invoke-GitHub -Method POST `
-            -Path "/repos/$owner/$repo/issues/$prNumber/comments" `
-            -Body @{ body = $Body }
-    }
 
     try {
         # first attempt: summary + inline comments
