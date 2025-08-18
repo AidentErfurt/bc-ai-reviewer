@@ -29,7 +29,7 @@ limitations under the License.
     AI provider: 'openai' or 'azure'. Default 'azure'.
 
 .PARAMETER Model
-    Deployment or model name. Default 'o3-mini'.
+    AI_MODEL is the base model. For Azure, set AZURE_DEPLOYMENT to your deployment’s friendly name (falls back to AI_MODEL if omitted. Default 'o3-mini'.
 
 .PARAMETER ApiKey
     OPENAI_API_KEY (required when Provider is 'openai').
@@ -42,6 +42,9 @@ limitations under the License.
 
 .PARAMETER AzureApiVersion
     Azure OpenAI API version. Default '2025-01-01-preview'.
+
+.PARAMETER AzureDeployment
+    Azure OpenAI deployment name (friendly name you created in Azure).
 
 .PARAMETER ApproveReviews
     Switch. Approve or request changes instead of only commenting.
@@ -141,6 +144,9 @@ function Invoke-AICodeReview {
 
         [string]$AzureApiVersion = '2025-01-01-preview',
 
+        [Parameter(ParameterSetName='Azure')]
+        [string]$AzureDeployment,
+
         # -----------------------------------------------------------------------
         [switch]$ApproveReviews,
         [ValidateRange(0,[int]::MaxValue)]
@@ -207,20 +213,19 @@ Begin {
             'azure' {
                 # Normalize endpoint
                 $endpointNorm = ($AzureEndpoint ?? '').TrimEnd('/')
-                $endpointNorm = $endpointNorm -replace '/openai$', ''   # strip accidental '/openai'
+                $endpointNorm = $endpointNorm -replace '/openai$', ''   # strip accidental '/openai' etc.
+
+                # Prefer explicit deployment; fall back to Model (back-compat)
+                $deploymentName = if ($AzureDeployment) { $AzureDeployment } else { $Model }
 
                 # Deployment path + URIs
-                $deploymentPath = "$endpointNorm/openai/deployments/$Model"
+                $deploymentPath = "$endpointNorm/openai/deployments/$deploymentName"
                 $primaryUri  = if ($isReasoningish) { "${deploymentPath}/responses?api-version=$AzureApiVersion" }
-                            else { "${deploymentPath}/chat/completions?api-version=$AzureApiVersion" }
+                               else { "${deploymentPath}/chat/completions?api-version=$AzureApiVersion" }
                 $fallbackUri = "${deploymentPath}/chat/completions?api-version=$AzureApiVersion"
                 $hdr         = @{ 'api-key' = $AzureApiKey; 'Content-Type' = 'application/json' }
 
-                Write-Host "Provider: azure"
-                Write-Host "Endpoint: $primaryUri"
-                Write-Host "Model: $Model$($isReasoningish ? ' (Responses API)' : ' (Chat Completions)')"
-
-                # Bodies
+                # Bodies (keep base model in body; Azure uses deployment from URL)
                 $bodyResponses = @{
                     model = $Model
                     input = $Messages
@@ -1398,7 +1403,12 @@ Example of an empty-but-valid result:
     $raw = $raw -replace '\\(?!["\\/bfnrtu])','\\\\'
 
     $review = Convert-FromAiJson -Raw $raw
-    $review.summary += "`n`n------`n`nCode review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model."
+    if ($Provider -eq 'azure') {
+        $dn = if ($AzureDeployment) { $AzureDeployment } else { $Model }
+        $review.summary += "`n`n------`n`nCode review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model (deployment: $dn)."
+    } else {
+        $review.summary += "`n`n------`n`nCode review performed by [BC-Reviewer](https://github.com/AidentErfurt/BC-AI-Reviewer) using $Model."
+    }
     
     $review.summary += "`n<!-- ai-sha:$headRef -->"
 

@@ -18,12 +18,15 @@ The action fetches the PR diff, optional context files, and any referenced issue
 | Name                      | Required?                                          | Default                      | Description                                                                                   |
 | ------------------------- | -------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
 | `GITHUB_TOKEN`            | **yes**                                            | –                            | Token with `contents:read`, `pull-requests:write`, `issues:read`.                         |
-| `AI_PROVIDER`             | no                                                 | `azure`                      | Which backend to call: `openai` \| `azure` \| `openrouter`.                                   |
-| `AI_MODEL`                | no                                                 | `o3-mini`                    | Model name (OpenAI/OpenRouter) **or** deployment name (Azure).                                |
-| `AI_API_KEY`              | only when `AI_PROVIDER` = `openai` \| `openrouter` | –                            | Public OpenAI key or OpenRouter key.                                                          |
-| `AZURE_ENDPOINT`          | only when `AI_PROVIDER` = `azure`                  | –                            | Your Azure OpenAI endpoint URL.                                                               |
-| `AZURE_API_KEY`           | only when `AI_PROVIDER` = `azure`                  | –                            | Azure OpenAI key.                                                                             |
-| `AZURE_API_VERSION`       | no                                                 | `2025-01-01-preview`         | Azure REST API version.                                                                       |
+| Name               | Required?                                   | Default              | Description                                                                                                  |
+|--------------------|---------------------------------------------|----------------------|--------------------------------------------------------------------------------------------------------------|
+| `AI_PROVIDER`      | no                                          | `azure`              | `openai` \| `azure` \| `openrouter`.                                                                         |
+| `AI_MODEL`         | no                                          | `o3-mini`            | **Base model name** (e.g., `gpt-5`, `o3-mini`). For Azure, this is the *base model* used in the request body.|
+| `AZURE_DEPLOYMENT` | only when `AI_PROVIDER` = `azure` (recommended) | –                  | **Azure deployment name** (the friendly name you created in Azure). If omitted, falls back to `AI_MODEL`.    |
+| `AI_API_KEY`       | only when `AI_PROVIDER` = `openai` \| `openrouter` | –               | Public OpenAI key or OpenRouter key.                                                                         |
+| `AZURE_ENDPOINT`   | only when `AI_PROVIDER` = `azure`           | –                    | Your Azure OpenAI endpoint URL.                                                                              |
+| `AZURE_API_KEY`    | only when `AI_PROVIDER` = `azure`           | –                    | Azure OpenAI key.                                                                                            |
+| `AZURE_API_VERSION`| no                                          | `2025-01-01-preview` | Azure REST API version.                                                                                      |
 | `MAX_COMMENTS`            | no                                                 | `10`                         | Hard cap for inline comments (`0` = unlimited).                                               |
 | `BASE_PROMPT_EXTRA`       | no                                                 | `""`                         | Extra text injected into the **system prompt** *before* the fixed JSON-response instructions. |
 | `PROJECT_CONTEXT`         | no                                                 | `""`                         | Free-form architectural or guideline notes shown to the model.                                |
@@ -98,9 +101,13 @@ jobs:
           AZURE_ENDPOINT:    https://<your-resource>.openai.azure.com
           AZURE_API_KEY:     ${{ secrets.AZURE_OPENAI_KEY }}
           AZURE_API_VERSION: 2025-04-01-preview
-          AI_MODEL:          gpt-5          # deployment name, not the base model
-          PROMPT_STYLE: auto                # auto-detects gpt-5 and switches prompt style
-          REASONING_EFFORT: high
+
+          # Separate base model vs deployment
+          AI_MODEL:          gpt-5              # base model name
+          AZURE_DEPLOYMENT:  reviewer-gpt5      # your deployment's friendly name
+
+          PROMPT_STYLE:      auto
+          REASONING_EFFORT:  high
 
           # Review behaviour
           MAX_COMMENTS:      0              # unlimited inline comments

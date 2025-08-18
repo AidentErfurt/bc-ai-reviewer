@@ -18,7 +18,7 @@ inputs:
     default: "azure"
 
   AI_MODEL:
-    description: "Model or deployment name"
+    description: "AI_MODEL is the base model. For Azure, set AZURE_DEPLOYMENT to your deployments friendly name (falls back to AI_MODEL if omitted"
     type: string
     default: "o3-mini"
 
@@ -41,6 +41,11 @@ inputs:
     description: "Azure OpenAI API version"
     type: string
     default: "2025-01-01-preview"
+
+  AZURE_DEPLOYMENT:
+    description: "Azure OpenAI deployment name (friendly name you created in Azure)"
+    type: string
+    required: false
 
   # Review behaviour
   APPROVE_REVIEWS:
@@ -187,6 +192,7 @@ runs:
           PromptStyle        = '${{ inputs.PROMPT_STYLE }}'
           ReasoningEffort    = '${{ inputs.REASONING_EFFORT }}'
           LogPrompt = [switch]::new([bool]::Parse('${{ inputs.LOG_PROMPT }}'))
+          AzureDeployment  = '${{ inputs.AZURE_DEPLOYMENT }}'
         }
         if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true')  { $p.ApproveReviews  = $true }
         if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }
