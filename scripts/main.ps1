@@ -205,7 +205,20 @@ Begin {
         # Build primary + fallback endpoints/headers/body per provider
         switch ($Provider) {
             'azure' {
-                $base = "$AzureEndpoint/openai/deployments/$Model"
+                $endpointNorm = $AzureEndpoint.TrimEnd('/')
+                $endpointNorm = $endpointNorm -replace '/openai$', ''   # strip accidental '/'
+                $base = "$endpointNorm/openai/deployments/$Model"
+
+                # prove the deployment exists
+                try {
+                    $probeUri = "$endpointNorm/openai/deployments/$Model?api-version=$AzureApiVersion"
+                    $null = Invoke-RestMethod -Method GET -Uri $probeUri -Headers @{ 'api-key' = $AzureApiKey }
+                } catch {
+                    Write-Error "Deployment probe failed for '$Model' at $probeUri : $($_.Exception.Message)"
+                    if ($_.ErrorDetails) { Write-Host $_.ErrorDetails.Message }
+                    throw
+                }
+
                 $primaryUri   = if ($isReasoningish) { "$base/responses?api-version=$AzureApiVersion" } else { "$base/chat/completions?api-version=$AzureApiVersion" }
                 $fallbackUri  = "$base/chat/completions?api-version=$AzureApiVersion"
                 $hdr          = @{ 'api-key' = $AzureApiKey; 'Content-Type' = 'application/json' }
