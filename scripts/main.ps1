@@ -198,58 +198,97 @@ Begin {
     
     function Invoke-OpenAIChat {
         param([array]$Messages)
-        if ($Provider -eq 'azure') {
-            $uri = "$AzureEndpoint/openai/deployments/$Model/chat/completions?api-version=$AzureApiVersion"
-            $hdr = @{ 'api-key' = $AzureApiKey; 'Content-Type' = 'application/json' }
-        } 
-        elseif ($Provider -eq 'openrouter') {
-            $uri = 'https://openrouter.ai/api/v1/chat/completions'   # OpenRouter base URL :contentReference[oaicite:0]{index=0}
-            $hdr = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json'; 'User-Agent'='bc-ai-reviewer' }
-            if ($OpenRouterReferer) { $hdr.'HTTP-Referer' = $OpenRouterReferer }
-            if ($OpenRouterTitle)   { $hdr.'X-Title'      = $OpenRouterTitle }
-        }
-        else {
-            # For OpenAI, use Responses API for o*-family; Chat for others
-            $useResponses = ($Model -match '^o[0-9]')   # e.g. o3-mini
-            $uri = if ($useResponses) {
-                'https://api.openai.com/v1/responses'
-            } else {
-                'https://api.openai.com/v1/chat/completions'
-            }
-            $hdr = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json' }
-        }
-        $body = if ($Provider -eq 'openai' -and $uri -like '*/responses') {
-            @{
-                model = $Model
-                input = $Messages
-                response_format = @{ type = 'json_object' }
-            }
-        } else {
-            @{
-                messages   = $Messages
-                model      = $Model
-            }
-        }
-        #TODO
-        # temperature = 0.2
-        # top_p       = 0.8
-        # max_tokens  = 1024   # hard guardrail
 
-        # azure zure passes the model via the url
-        if ($Provider -in @('openai','openrouter')) { 
-            $body.model = $Model 
+        # Heuristics: when to prefer the Responses API
+        $isReasoningish = ($Model -match '^(?i)(o\d|gpt-?5)') -or ($PromptStyle -eq 'gpt5')
+
+        # Build primary + fallback endpoints/headers/body per provider
+        switch ($Provider) {
+            'azure' {
+                $base = "$AzureEndpoint/openai/deployments/$Model"
+                $primaryUri   = if ($isReasoningish) { "$base/responses?api-version=$AzureApiVersion" } else { "$base/chat/completions?api-version=$AzureApiVersion" }
+                $fallbackUri  = "$base/chat/completions?api-version=$AzureApiVersion"
+                $hdr          = @{ 'api-key' = $AzureApiKey; 'Content-Type' = 'application/json' }
+
+                # Bodies
+                $bodyResponses = @{
+                    model = $Model    # Azure ignores this but harmless
+                    input = $Messages
+                    response_format = @{ type = 'json_object' }
+                }
+                if ($isReasoningish -and $ReasoningEffort) {
+                    $bodyResponses.reasoning = @{ effort = $ReasoningEffort } # hint; ignored by non-reasoning models
+                }
+
+                $bodyChat = @{
+                    model    = $Model
+                    messages = $Messages
+                }
+            }
+
+            'openrouter' {
+                # Chat Completions only
+                $primaryUri  = 'https://openrouter.ai/api/v1/chat/completions'
+                $fallbackUri = $primaryUri
+                $hdr = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json'; 'User-Agent'='bc-ai-reviewer' }
+                if ($OpenRouterReferer) { $hdr.'HTTP-Referer' = $OpenRouterReferer }
+                if ($OpenRouterTitle)   { $hdr.'X-Title'      = $OpenRouterTitle }
+
+                $bodyChat = @{ model = $Model; messages = $Messages }
+            }
+
+            default { # 'openai'
+                $primaryUri  = if ($isReasoningish) { 'https://api.openai.com/v1/responses' } else { 'https://api.openai.com/v1/chat/completions' }
+                $fallbackUri = 'https://api.openai.com/v1/chat/completions'
+                $hdr = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json' }
+
+                $bodyResponses = @{
+                    model = $Model
+                    input = $Messages
+                    response_format = @{ type = 'json_object' }
+                }
+                if ($isReasoningish -and $ReasoningEffort) {
+                    $bodyResponses.reasoning = @{ effort = $ReasoningEffort }
+                }
+
+                $bodyChat = @{
+                    model    = $Model
+                    messages = $Messages
+                }
+            }
         }
 
-        Write-Host "Provider: $Provider"
-        Write-Host "Endpoint: $uri"
-        Write-Host "Model:    $Model"
-        Write-Host ""
+        # Helper to POST
+        function Invoke-JsonPost([string]$uri,[hashtable]$hdr,[hashtable]$body) {
+            Invoke-WithRetry {
+                Invoke-RestMethod -Method POST -Uri $uri -Headers $hdr -Body ($body | ConvertTo-Json -Depth 10)
+            }
+        }
 
+        # Prefer Responses when we picked it, fall back to Chat if unsupported
+        $usingResponses = ($primaryUri -like '*/responses*')
         try {
-            Invoke-WithRetry { Invoke-RestMethod -Method POST -Uri $uri -Headers $hdr -Body ($body | ConvertTo-Json -Depth 8) }
-        } catch {
-            Write-Error "OpenAI call failed: $_"
-            throw
+            if ($usingResponses) {
+                Write-Host "Provider: $Provider`nEndpoint: $primaryUri`nModel: $Model (Responses API)"
+                return Invoke-JsonPost $primaryUri $hdr $bodyResponses
+            } else {
+                Write-Host "Provider: $Provider`nEndpoint: $primaryUri`nModel: $Model (Chat Completions)"
+                return Invoke-JsonPost $primaryUri $hdr $bodyChat
+            }
+        }
+        catch {
+                # Only attempt fallback when our primary was Responses and the error looks like an unsupported route/arg
+                $msg   = $_.Exception.Message
+                $code  = $_.Exception.Response.StatusCode.value__  # may be null for some failures
+                $looksUnsupported = $usingResponses -and ($code -in 400,404 -or $msg -match '(route|path).*(not found|unsupported|unknown)' -or $msg -match 'Unrecognized request argument.*input' -or $msg -match 'No such route'
+            )
+
+            if ($looksUnsupported -and $fallbackUri) {
+                Write-Warning "Responses API not available for this deployment/API version. Falling back to Chat Completions."
+                return Invoke-JsonPost $fallbackUri $hdr $bodyChat
+            }
+
+            throw  # real error; bubble up
         }
     }
 
@@ -1305,11 +1344,30 @@ Example of an empty-but-valid result:
 
     # Extract text for Chat or Responses API
     $raw = $null
-    if ($resp.PSObject.Properties.Name -contains 'choices') {
+
+    # 1) Chat Completions
+    if ($resp.PSObject.Properties.Name -contains 'choices' -and $resp.choices.Count) {
         $raw = $resp.choices[0].message.content
-    } elseif ($resp.PSObject.Properties.Name -contains 'output') {
-        $raw = ($resp.output[0].content | Where-Object type -eq 'output_text')[0].text
     }
+
+    # 2) Responses API variants
+    if (-not $raw) {
+        # a) output_text (common)
+        if ($resp.PSObject.Properties.Name -contains 'output_text' -and $resp.output_text) {
+            $raw = $resp.output_text
+        }
+        # b) output[].content[] blocks
+        elseif ($resp.PSObject.Properties.Name -contains 'output' -and $resp.output.Count) {
+            $block = $resp.output[0].content | Where-Object { $_.type -eq 'output_text' -or $_.type -eq 'text' } | Select-Object -First 1
+            if ($block) { $raw = $block.text }
+        }
+        # c) content[].text (some preview payloads)
+        elseif ($resp.PSObject.Properties.Name -contains 'content' -and $resp.content.Count) {
+            $c0 = $resp.content[0]
+            if ($c0.PSObject.Properties.Name -contains 'text') { $raw = $c0.text }
+        }
+    }
+
     if ($raw) { $raw = $raw.Trim() -replace '^```json','' -replace '```$','' }
 
     if (-not $resp -or -not $raw) {
