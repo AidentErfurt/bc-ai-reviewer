@@ -640,7 +640,45 @@ closingIssuesReferences(first: 50) {
             [string] $ReasoningEffort
         )
 
-        if ($UseGpt5) {
+        # Shared review rubric (compact, reviewer-centric; not a code-gen spec)
+$rubric = @"
+<review_rubric>
+  <quality_gates>
+    - AL analyzers enabled (CodeCop, UICop, AppSourceCop; PerTenantExtensionCop for PTEs) and important diagnostics addressed.
+    - DataClassification set (avoid ToBeClassified) when adding/altering table fields.
+    - ObsoleteState/ObsoleteTag used when deprecating symbols; avoid deprecated APIs.
+    - New objects covered by PermissionSet/Entitlement with least privilege.
+  </quality_gates>
+  <performance>
+    - Prefer set-based ops: FindSet + repeat...until Next() = 0 over FindFirst in loops.
+    - Avoid IsEmpty() before FindSet() unless justified.
+    - Use SetLoadFields/partial records when iterating or reading few fields.
+    - Be cautious with COMMIT; keep transactions small. Consider CommitBehavior in sensitive flows.
+  </performance>
+  <ui_text_and_tooltips>
+    - Pages/Reports: include ApplicationArea and UsageCategory so objects appear in Search.
+    - ToolTips: present and concise; field ToolTips start with "Specifies ...".
+    - Use Labels for user-facing strings (Message/Error/Confirm); avoid hardcoded literals.
+  </ui_text_and_patterns>
+  <architecture_and_style>
+    - Prefer Enums (extensible) over Options for new work; use interfaces for pluggable logic.
+    - Encapsulate internals (Access = Internal; use façades/public contracts).
+    - Follow MS naming/formatting; keep procedures cohesive and single-purpose.
+    - Prefer events (publish/subscribe) over modifying base logic.
+  </architecture_and_style>
+  <testing_and_tooling>
+    - Add small test codeunits for critical logic; use TransactionModel appropriately.
+    - Add telemetry/logging where it helps supportability (no personal data).
+  </testing_and_tooling>
+  <review_etiquette>
+    - Only claim issues you can see in the diff or context; if something is likely but not shown, add it to the summary as a suggestion and lower confidence.
+    - Don’t ask the human to clarify mid-review. If you assume something, note it under “Assumptions” in the summary.
+    - Keep inlines ≤ 3 lines; aggregate overflow in the summary.
+  </review_etiquette>
+</review_rubric>
+"@
+
+    if ($UseGpt5) {
 @"
 <code_review_task>
   <role>AI reviewer for Microsoft Dynamics 365 Business Central repositories.</role>
@@ -663,9 +701,9 @@ $ProjectContext
   - Use GitHub-flavoured Markdown only inside "comment" fields; plain text elsewhere.
   - Do not rely on contextFiles for inline comments.
   - Inline comments must reference a {path,line} present in the numbered diff and the validLines table.
-  - Focus on code (naming, performance, events/trigger usage, filters, record locking, UI strings).
-  - If a new AL object lacks a corresponding *.PermissionSet.al or *.Entitlement.al, add an inline and mention it in the summary.
 </guidance>
+
+$rubric
 
 <additional_inputs>
   - bcObjects: metadata; use for reasoning only.
@@ -695,8 +733,8 @@ $(
 $BasePromptExtra
 </extra>
 "@
-        }
-        else {
+    }
+    else {
 @"
 You are reviewing AL code for Microsoft Dynamics 365 Business Central.
 Your tasks:
@@ -706,48 +744,31 @@ Your tasks:
 4. Judge readability & maintainability
 5. Surface security concerns, especially permission/entitlement coverage
 
-Suggest improvements and explain your reasoning for each suggestion.
-
 $BasePromptExtra
 
+**Review rubric (apply to what’s visible in the diff/context):**
+$rubric
+
 **When you answer:**
-* Open with one or two sentences that acknowledge what looks good.
-* Provide **up to $MaxInline concise inline comments**; aggregate any extra in the summary.
+* Provide **up to $MaxInline** concise inline comments; aggregate any extra in the summary.
 * If nothing needs improvement, set `"comments": []`.
 * Output GitHub-flavoured Markdown **inside** `"comment"` fields **only**; plain text elsewhere.
-* You must output **only** a single JSON object (no surrounding text, no code fences).
-* Escape all JSON strings (quotes, backslashes) so the output parses cleanly.
+* Respond **only** with a single JSON object (no fences), escaping strings correctly.
+$(
+    if ($IsUpdate) { "`nPrevious feedback already addressed can be omitted; focus on new changes." } else { "" }
+)
 
-**Do not add inline comments for anything you see only in `contextFiles`.**
-Inline `comments` **must** reference a `path` & `line` that exists in the numbered `files` diff
-and the `validLines` table provided in the request. Comments that don't match will be ignored.
-
-Focus exclusively on the code: naming, performance, events/trigger usage, filters,
-record locking, permission/entitlement changes, UI strings (tone & BC terminology).
-
-If a new AL object is introduced without a corresponding *.PermissionSet.al or *.Entitlement.al file:
-- add one inline comment per object and mention it in summary.
-
-Additional fields you receive:
-* **bcObjects**   - array of object metadata (type, id, name, sourceTable).
-* **richSnippets** - extended AL code blocks surrounding the changes. Use them for reasoning, don't quote verbatim.
-
-Respond **only** with a JSON object using **exactly** these keys:
-
+Respond **only** with:
 {
 "summary"        : "<overall feedback - max 10 lines>",
 "comments"       : [ { "path": "string", "line": number, "comment": "string (≤ 3 lines)" } ],
 "suggestedAction": "approve" | "request_changes" | "comment",
 "confidence"     : 0-1
 }
-
-Set "confidence" between 0 (no certainty) and 1 (absolute certainty).
-$(
-    if ($IsUpdate) { "`nPrevious feedback already addressed can be omitted; focus on new changes." } else { "" }
-)
 "@
-        }
     }
+}
+
 
     ############################################################################
     # Helper: Responses extraction
@@ -1287,7 +1308,7 @@ Example of an empty-but-valid result:
         head        = $pr.head.sha
     }
 
-    # Build a "validLines" whitelist:  { <path> = @(line1,line2,…) }
+    # Build a "validLines" whitelist:  { <path> = @(line1,line2,...) }
     $validLines = @{}
     foreach ($f in $relevant) {
         $lines = foreach ($chunk in $f.chunks) {
