@@ -192,7 +192,6 @@ runs:
           PromptStyle        = '${{ inputs.PROMPT_STYLE }}'
           ReasoningEffort    = '${{ inputs.REASONING_EFFORT }}'
           LogPrompt = [switch]::new([bool]::Parse('${{ inputs.LOG_PROMPT }}'))
-          AzureDeployment  = '${{ inputs.AZURE_DEPLOYMENT }}'
         }
         if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true')  { $p.ApproveReviews  = $true }
         if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }
@@ -202,11 +201,15 @@ runs:
           $p.Remove('AzureEndpoint')
           $p.Remove('AzureApiKey')
           $p.Remove('AzureApiVersion')
+          $p.Remove('AZURE_DEPLOYMENT')
         } else {
           $p.AzureEndpoint   = $Env:AZURE_OPENAI_ENDPOINT
           $p.AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
           $p.AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
           $p.Remove('ApiKey')
+          if ('${{ inputs.AZURE_DEPLOYMENT }}') {
+            $p.AzureDeployment = '${{ inputs.AZURE_DEPLOYMENT }}'
+          }
         }
 
         Invoke-AICodeReview @p
