@@ -1039,8 +1039,8 @@ Process {
 
         # 2) enumerate all app.json in the repo
         Write-Host "::group::Detect app structure & context"
-        $allAppJsons = @(Get-ChildItem -Path $repoRoot -Recurse -Filter 'app.json') |
-                    ForEach-Object { $_.FullName.Replace('\','/') }
+        $allAppJsons = @(Get-ChildItem -Path $repoRoot -Recurse -Filter 'app.json' |
+                        ForEach-Object { $_.FullName.Replace('\','/') })
         Write-Host "Autodetect app structure. Relevant files = $($relevant.Count). Total apps = $($allAppJsons.Count)"
 
         # 3) work out which apps are touched by the diff
