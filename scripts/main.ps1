@@ -1039,7 +1039,7 @@ Process {
 
         # 2) enumerate all app.json in the repo
         Write-Host "::group::Detect app structure & context"
-        $allAppJsons = Get-ChildItem -Path $repoRoot -Recurse -Filter 'app.json' |
+        $allAppJsons = @(Get-ChildItem -Path $repoRoot -Recurse -Filter 'app.json') |
                     ForEach-Object { $_.FullName.Replace('\','/') }
         Write-Host "Autodetect app structure. Relevant files = $($relevant.Count). Total apps = $($allAppJsons.Count)"
 
