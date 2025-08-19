@@ -91,7 +91,7 @@ jobs:
           fetch-depth: 0      # base & head commits are both needed for git diff
 
       - name: Run AI Code Reviewer
-        uses: AidentErfurt/bc-reviewer@main
+        uses: AidentErfurt/bc-ai-reviewer@main
         with:
           GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
 
@@ -161,7 +161,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: AidentErfurt/bc-reviewer@main
+      - uses: AidentErfurt/bc-ai-reviewer@main
         with:
           GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
 
@@ -206,7 +206,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run AI Code Reviewer
-        uses: AidentErfurt/bc-reviewer@main
+        uses: AidentErfurt/bc-ai-reviewer@main
         with:
           GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
 
