@@ -56,7 +56,7 @@ The action fetches the PR diff, optional context files, and any referenced issue
 ## 📦 Usage
 
 **GPT-5 prompt mode**  
-Set `PROMPT_STYLE: auto` (default). If `AI_MODEL` starts with `gpt-5` the action switches to the GPT-5-optimized, XML-structured prompt automatically—this works for both **OpenAI** and **Azure OpenAI** deployments. You can force it with `PROMPT_STYLE: gpt5` or disable with `PROMPT_STYLE: generic`. Optional `REASONING_EFFORT: high|medium|low` tunes GPT-5’s depth.
+Set `PROMPT_STYLE: auto` (default). If `AI_MODEL` starts with `gpt-5` the action switches to the GPT-5-optimized, XML-structured prompt automatically-this works for both **OpenAI** and **Azure OpenAI** deployments. You can force it with `PROMPT_STYLE: gpt5` or disable with `PROMPT_STYLE: generic`. Optional `REASONING_EFFORT: high|medium|low` tunes GPT-5’s depth.
 
 ## Azure OpenAI - Example 1
 
