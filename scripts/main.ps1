@@ -168,6 +168,13 @@ function Invoke-AICodeReview {
         [switch] $DisableGuidelineDocs,
         [bool] $IncludeChangedFilesAsContext = $false,
         [switch]$LogPrompt
+
+        # --- Serena MCP (optional) -------------------------------------------
+        [bool]  $EnableSerena       = $false,
+        [string]$SerenaUrl          = '',
+        [int]   $SerenaTimeoutSec   = 20,
+        [int]   $SerenaMaxRefs      = 50,
+        [int]   $SerenaSymbolDepth  = 1
     )
 
 Begin {
@@ -802,6 +809,129 @@ Respond **only** with:
     }
 
     ############################################################################
+    # Helper: call Serena MCP (Streamable HTTP) tools
+    ############################################################################
+    function Invoke-SerenaTool {
+        param(
+            [Parameter(Mandatory)][string]$ToolName,
+            [hashtable]$Arguments = @{}
+        )
+        if (-not $EnableSerena -or [string]::IsNullOrWhiteSpace($SerenaUrl)) {
+            return $null
+        }
+        try {
+            $body = @{
+                jsonrpc = '2.0'
+                id      = [guid]::NewGuid().ToString()
+                method  = 'tools/call'
+                params  = @{ name = $ToolName; arguments = $Arguments }
+            }
+            $hdr = @{ 'Content-Type' = 'application/json' }
+            $resp = Invoke-RestMethod -Method POST -Uri $SerenaUrl -Headers $hdr `
+                    -Body ($body | ConvertTo-Json -Depth 10) -TimeoutSec $SerenaTimeoutSec
+
+            # Serena commonly returns {"result":{...}} or direct payload; accept both
+            if ($resp.PSObject.Properties['result']) { return $resp.result }
+            return $resp
+        }
+        catch {
+            Write-Warning "Serena tool '$ToolName' failed: $($_.Exception.Message)"
+            return $null
+        }
+    }
+
+    # Symbols:
+    # get_symbols_overview gives a compact per-file map of procedures/triggers etc., 
+    # which the model can use to anchor comments to the right places even when the diff is sparse.
+    function Get-SerenaSymbolsOverview {
+        param([string]$RelPath)
+        Invoke-SerenaTool -ToolName 'get_symbols_overview' -Arguments @{ relative_path = $RelPath }
+    }
+
+    # Where-used: 
+    # find_symbol -> find_referencing_symbols yields cross-refs for touched procedures/triggers, 
+    # helping the reviewer flag knock-on effects and missing permission/entitlement updates without shipping entire files.
+    function Find-SerenaSymbol {
+        param(
+            [string]$NamePath,
+            [string]$RelPath,
+            [int]$Depth = 1
+        )
+        Invoke-SerenaTool -ToolName 'find_symbol' -Arguments @{
+            name_path            = $NamePath
+            within_relative_path = $RelPath
+            depth                = $Depth
+        }
+    }
+
+    function Get-SerenaReferences {
+        param(
+            [string]$NamePath,
+            [int]$Max = 50
+        )
+        $res = Invoke-SerenaTool -ToolName 'find_referencing_symbols' -Arguments @{ name_path = $NamePath }
+        if (-not $res) { return @() }
+        return @($res)[0..([math]::Min($Max, @($res).Count) - 1)]
+    }
+
+    ############################################################################
+    # Helper: AL parser to extract changed procedures/triggers & top-level objects
+    ############################################################################
+
+    function Get-AlTopLevelObject {
+        param([string]$Text)
+        $rx = [regex]'(?im)^(table|page|pageextension|tableextension|codeunit|enum|report)\s+(\d+)?\s*("([^"]+)"|[A-Za-z_][\w]*)'
+        $m = $rx.Match($Text)
+        if (-not $m.Success) { return $null }
+        $name = if ($m.Groups[4].Success) { $m.Groups[4].Value } else { $m.Groups[3].Value }
+        [pscustomobject]@{
+            type = $m.Groups[1].Value
+            id   = if ($m.Groups[2].Success) { [int]$m.Groups[2].Value } else { $null }
+            name = $name
+        }
+    }
+
+    function Get-AlChangedSymbols {
+        param(
+            [string]$Text,
+            [int[]] $TouchedLines
+        )
+        $lines = $Text -split "`n"
+        $rxDef = [regex]'(?im)^(?:procedure|trigger)\s+("?[\w\d_]+"?)\s*\('
+        $defs = @()
+        for ($i=0; $i -lt $lines.Length; $i++) {
+            $m = $rxDef.Match($lines[$i])
+            if ($m.Success) {
+                $nm = $m.Groups[1].Value.Trim('"')
+                $defs += [pscustomobject]@{ name=$nm; start=($i+1) }  # 1-based
+            }
+        }
+        if (-not $defs) { return @() }
+        # mark defs that are within ~50 lines of any touched line
+        $win = 50
+        $picked = @()
+        foreach ($d in $defs) {
+            foreach ($t in $TouchedLines) {
+                if ([math]::Abs($t - $d.start) -le $win) { $picked += $d; break }
+            }
+        }
+        # de-dupe by name
+        return ($picked | Group-Object name | ForEach-Object { $_.Group[0] })
+    }
+
+    function Get-BlockSnippetAround {
+        param(
+            [string]$Text,
+            [int]$StartLine,
+            [int]$MaxLines = 200
+        )
+        $lines = $Text -split "`n"
+        $s = [math]::Max(1, $StartLine - 10)
+        $e = [math]::Min($lines.Length, $StartLine + $MaxLines - 1)
+        ($lines[($s-1)..($e-1)] -join "`n")
+    }
+
+    ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode...
     ############################################################################
 
@@ -994,7 +1124,7 @@ Process {
     }
 
     ############################################################################
-    # 4b.  Add changed files themselves as extra context (optional)
+    # 4b. Add changed files themselves as extra context (optional)
     ############################################################################
     $ctxFiles = @()
     if ($IncludeChangedFilesAsContext) {
@@ -1024,6 +1154,80 @@ Process {
             $ctxBytes -= $ctxFiles[-1].content.Length
             $ctxFiles  = $ctxFiles[0..($ctxFiles.Count-2)]
         }
+    }
+
+    ############################################################################
+    # 4c. Serena enrichment (optional): symbols, where-used, rich snippets
+    ############################################################################
+    $bcObjects    = @()
+    $richSnippets = @()
+
+    if ($EnableSerena) {
+        Write-Host "::group::Serena enrichment"
+    }
+
+    foreach ($f in $relevant | Where-Object { $_.path -like '*.al' }) {
+        $headContent = Get-FileContent -Owner $owner -Repo $repo -Path $f.path -RefSha $headRef
+        if (-not $headContent) { continue }
+
+        # Top-level object (fallback parsing)
+        $obj = Get-AlTopLevelObject -Text $headContent
+        if ($obj) {
+            $bcObjects += [pscustomobject]@{
+                path       = $f.path
+                objectType = $obj.type
+                objectId   = $obj.id
+                objectName = $obj.name
+            }
+        }
+
+        # Serena: get symbol overview for the file
+        if ($EnableSerena) {
+            $sym = Get-SerenaSymbolsOverview -RelPath $f.path
+            if ($sym) {
+                $ctxFiles += [pscustomobject]@{
+                    path    = "Serena/Symbols/$($f.path).json"
+                    content = ($sym | ConvertTo-Json -Depth 10)
+                }
+                Write-Host "  + symbols: $($f.path)"
+            }
+        }
+
+        # Determine changed symbol defs near touched lines
+        $touched = @($validLines[$f.path])
+        $defs    = Get-AlChangedSymbols -Text $headContent -TouchedLines $touched
+
+        foreach ($d in $defs) {
+            # Rich snippet: grab a reasonable block around definition start
+            $snippet = Get-BlockSnippetAround -Text $headContent -StartLine $d.start -MaxLines 200
+            if ($snippet) {
+                $richSnippets += [pscustomobject]@{
+                    path   = $f.path
+                    label  = $d.name
+                    start  = $d.start
+                    code   = $snippet
+                }
+            }
+
+            # Serena where-used
+            if ($EnableSerena) {
+                $symHit = Find-SerenaSymbol -NamePath $d.name -RelPath $f.path -Depth $SerenaSymbolDepth
+                # Prefer fully qualified name_path from Serena when available
+                $namePath = if ($symHit -and $symHit[0] -and $symHit[0].name_path) { $symHit[0].name_path } else { $d.name }
+                $refs = Get-SerenaReferences -NamePath $namePath -Max $SerenaMaxRefs
+                if ($refs -and $refs.Count) {
+                    $ctxFiles += [pscustomobject]@{
+                        path    = "Serena/WhereUsed/$($f.path)#$($d.name).json"
+                        content = ($refs | ConvertTo-Json -Depth 10)
+                    }
+                    Write-Host "    └─ where-used: $($d.name) ($($refs.Count))"
+                }
+            }
+        }
+    }
+
+    if ($EnableSerena) {
+        Write-Host "::endgroup::"
     }
 
     ###########################################################################
@@ -1350,6 +1554,8 @@ Example of an empty-but-valid result:
             contextFiles = $ctxFiles
             pullRequest  = $pullObj
             issues       = $issueCtx
+            bcObjects    = $bcObjects
+            richSnippets = $richSnippets
             context      = @{
                 repository     = $env:GITHUB_REPOSITORY
                 projectContext = $ProjectContext

@@ -42,6 +42,11 @@ The action fetches the PR diff, optional context files, and any referenced issue
 | `PROMPT_STYLE`            | no                                                 | `auto`                      | `auto` = GPT-5 prompt when `AI_MODEL` matches `gpt-5*` (OpenAI **or** Azure); `gpt5` forces it; `generic` disables it.      |
 | `REASONING_EFFORT`        | no                                                 | `medium`                    | Hint for GPT-5 reasoning depth: `low` \| `medium` \| `high` (ignored by other models).                                       |
 | `LOG_PROMPT`        | no                                                 | `false`                    | Log full prompt (diff + context) to runner logs.                                       |
+| `ENABLE_SERENA`            | no  | `false` | Enable Serena MCP enrichment (symbols, where-used, rich snippets). |
+| `SERENA_URL`               | no  | `""`    | Serena MCP HTTP endpoint (e.g., `http://host:5173/mcp`).           |
+| `SERENA_TIMEOUT_SEC`       | no  | `20`    | HTTP timeout for Serena tool calls.                                 |
+| `SERENA_MAX_REFS`          | no  | `50`    | Cap for “where-used” references per symbol.                         |
+| `SERENA_SYMBOL_DEPTH`      | no  | `1`     | Depth when resolving a symbol via `find_symbol`.                    |
 
 
 ## 🛠 How it works
@@ -226,6 +231,38 @@ jobs:
           AUTO_DETECT_APPS:    true    # enable app.json discovery
           INCLUDE_PATTERNS: "**/*.al,**/*.rdlc,**/*.json"
 ```
+
+### 🧩 Optional: Enrich AL reviews with Serena (MCP)
+
+When enabled, the action can enrich the PR review with:
+- **Symbols** for changed AL files (`get_symbols_overview`)
+- **Where-used** cross-references for procedures/triggers
+- **Richer code snippets** around the touched lines
+
+#### Two ways to use it
+
+**A) Auto-start Serena inside the action (simplest)**
+- Set `ENABLE_SERENA: true`.
+- Leave `SERENA_URL` empty (default).  
+  The action will install `uv`, start a local Serena MCP server (HTTP transport, AL enabled), health-check it, and use it for enrichment.
+
+**B) Use an existing Serena server**
+- Set `ENABLE_SERENA: true`.
+- Set `SERENA_URL` to your endpoint, e.g. `http://<host>:5173/mcp`.
+
+If Serena is unreachable or errors, the action continues **without** enrichment.
+
+#### Inputs
+
+- `ENABLE_SERENA` – turn enrichment on/off (default `false`)
+- `SERENA_URL` – MCP endpoint (leave empty to auto-start)
+- `SERENA_TIMEOUT_SEC` – HTTP timeout in seconds (default `20`)
+- `SERENA_MAX_REFS` – cap for where-used references per symbol (default `50`)
+- `SERENA_SYMBOL_DEPTH` – depth for `find_symbol` resolution (default `1`)
+
+#### Notes
+- Where-used lists are capped by `SERENA_MAX_REFS`.
+- Auto-start runs on the job runner (e.g., `ubuntu-latest`). If you prefer a shared/long-lived Serena instance, pass a `SERENA_URL` and auto-start will be skipped.
 
 ## 💬 Contributing
 

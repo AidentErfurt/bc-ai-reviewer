@@ -143,6 +143,26 @@ inputs:
     description: "Log full prompt (diff + context) to runner logs"
     type: boolean
     default: false
+  ENABLE_SERENA:
+    description: "Enable Serena MCP enrichment (symbols, where-used, rich snippets)"
+    type: boolean
+    default: false
+  SERENA_URL:
+    description: "Serena MCP HTTP endpoint (e.g., http://host:5173/mcp)"
+    type: string
+    default: ""
+  SERENA_TIMEOUT_SEC:
+    description: "HTTP timeout (seconds) for Serena tool calls"
+    type: number
+    default: 20
+  SERENA_MAX_REFS:
+    description: "Cap for where-used references per symbol"
+    type: number
+    default: 50
+  SERENA_SYMBOL_DEPTH:
+    description: "Depth for find_symbol (0 = symbol only)"
+    type: number
+    default: 1
 
 
 runs:
@@ -157,6 +177,40 @@ runs:
       shell: pwsh
       working-directory: ${{ github.action_path }}
       run: npm install --no-save parse-diff@latest
+
+    # install uv only when we need a local Serena
+    - name: Install uv (for embedded Serena)
+      if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
+      shell: pwsh
+      run: |
+        bash -lc 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+        Add-Content -Path $env:GITHUB_PATH -Value "$HOME/.local/bin"
+
+    # start Serena MCP (AL) and wait until healthy
+    - name: Start Serena MCP (AL)
+      if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
+      shell: pwsh
+      run: |
+        $port = 5173
+        $cmd = 'uvx --from git+https://github.com/oraios/serena serena start-mcp-server --transport streamable-http --port {0} --languages al' -f $port
+        bash -lc "nohup $cmd > /tmp/serena.log 2>&1 & echo \$! > /tmp/serena.pid"
+
+        $uri  = "http://127.0.0.1:$port/mcp"
+        $body = '{"jsonrpc":"2.0","id":"1","method":"tools/list"}'
+        $ready = $false
+        for ($i=1; $i -le 30; $i++) {
+          try {
+            Invoke-RestMethod -Method Post -Uri $uri -ContentType 'application/json' -Body $body -TimeoutSec 2 | Out-Null
+            $ready = $true; break
+          } catch { Start-Sleep -Seconds 1 }
+        }
+        if (-not $ready) {
+          Write-Host 'Serena MCP failed to start. Tail:'
+          if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
+          exit 1
+        }
+        # expose to later steps (and main.ps1) if SERENA_URL input is empty
+        "SERENA_URL=$uri" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
 
     - name: Run AI Code Review
       shell: pwsh
@@ -192,9 +246,15 @@ runs:
           PromptStyle        = '${{ inputs.PROMPT_STYLE }}'
           ReasoningEffort    = '${{ inputs.REASONING_EFFORT }}'
           LogPrompt = [switch]::new([bool]::Parse('${{ inputs.LOG_PROMPT }}'))
+          EnableSerena          = [bool]::Parse('${{ inputs.ENABLE_SERENA }}')
+          SerenaUrl             = '${{ inputs.SERENA_URL }}'
+          SerenaTimeoutSec      = [int]'${{ inputs.SERENA_TIMEOUT_SEC }}'
+          SerenaMaxRefs         = [int]'${{ inputs.SERENA_MAX_REFS }}'
+          SerenaSymbolDepth     = [int]'${{ inputs.SERENA_SYMBOL_DEPTH }}'
         }
         if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true')  { $p.ApproveReviews  = $true }
         if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }
+        if (-not $p.SerenaUrl -and $Env:SERENA_URL) { $p.SerenaUrl = $Env:SERENA_URL }
 
         if ($p.Provider -in @('openai','openrouter')) {
           $p.ApiKey = $Env:OPENAI_API_KEY
@@ -213,3 +273,13 @@ runs:
         }
 
         Invoke-AICodeReview @p
+
+    - name: Stop Serena MCP
+      if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
+      shell: pwsh
+      run: |
+        if (Test-Path /tmp/serena.pid) {
+          $pid = Get-Content /tmp/serena.pid
+          Write-Host "Stopping Serena PID $pid"
+          kill -TERM $pid 2>$null || $true
+        }
