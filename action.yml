@@ -192,7 +192,7 @@ runs:
       shell: pwsh
       run: |
         $port = 5173
-        $cmd = 'uvx --from git+https://github.com/oraios/serena serena start-mcp-server --transport streamable-http --port {0} --languages al' -f $port
+        $cmd = 'uvx --from git+https://github.com/oraios/serena serena start-mcp-server --transport streamable-http --port {0}' -f $port
         bash -lc "nohup $cmd > /tmp/serena.log 2>&1 & echo \$! > /tmp/serena.pid"
 
         $uri  = "http://127.0.0.1:$port/mcp"
