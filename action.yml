@@ -195,30 +195,65 @@ runs:
         $cmd = 'uvx --from git+https://github.com/oraios/serena serena start-mcp-server --transport streamable-http --port {0}' -f $port
         bash -lc "nohup $cmd > /tmp/serena.log 2>&1 & echo \$! > /tmp/serena.pid"
 
-        $uri  = "http://127.0.0.1:$port/mcp"
-        # MCP handshake first
-        $body = '{
-          "jsonrpc":"2.0",
-          "id":"1",
-          "method":"initialize",
-          "params":{
-            "protocolVersion":"2024-10-07",
-            "capabilities":{}
-          }
-        }'
-        $ready = $false
-        for ($i=1; $i -le 60; $i++) {
+        $uri = "http://127.0.0.1:$port/mcp"
+
+        # 1) Establish a streamable-http session (GET with SSE accept)
+        $sessionId = $null
+        $maxTries = 60
+        for ($i=1; $i -le $maxTries; $i++) {
           try {
-            $resp = Invoke-RestMethod -Method Post -Uri $uri -ContentType 'application/json' -Headers @{ Accept='application/json' } -Body $body -TimeoutSec 3
-            if ($resp -and $resp.result) { $ready = $true; break }
-          } catch { Start-Sleep -Seconds 1 }
+            # Some servers return 200 with headers; others may hold the stream open.
+            $resp = Invoke-WebRequest -Method GET -Uri $uri -Headers @{ Accept = 'text/event-stream' } -TimeoutSec 3
+            $sessionId = $resp.Headers['Mcp-Session-Id']
+          } catch {
+            # If the stream upgrade triggers a non-200, still try to read headers
+            if ($_.Exception.Response) {
+              $hdrs = $_.Exception.Response.Headers
+              $sessionId = $hdrs['Mcp-Session-Id']
+              if (-not $sessionId) { $sessionId = $hdrs['MCP-Session-Id'] }
+            }
+          }
+          if ($sessionId) { break }
+          Start-Sleep -Seconds 1
         }
-        if (-not $ready) {
-          Write-Host 'Serena MCP failed to start. Tail:'
+
+        if (-not $sessionId) {
+          Write-Host 'Serena MCP failed to start (no Mcp-Session-Id). Tail:'
           if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
           exit 1
         }
+
+        # 2) Initialize JSON-RPC over POST with the session header
+        $body = @{
+          jsonrpc = "2.0"
+          id = "1"
+          method = "initialize"
+          params = @{
+            protocolVersion = "2024-10-07"
+            capabilities    = @{}
+          }
+        } | ConvertTo-Json -Depth 5
+
+        $ok = $false
+        for ($i=1; $i -le 10; $i++) {
+          try {
+            $resp = Invoke-RestMethod -Method Post -Uri $uri `
+              -ContentType 'application/json' `
+              -Headers @{ Accept='application/json'; 'Mcp-Session-Id' = $sessionId } `
+              -Body $body -TimeoutSec 5
+            if ($resp -and $resp.result) { $ok = $true; break }
+          } catch { Start-Sleep -Seconds 1 }
+        }
+
+        if (-not $ok) {
+          Write-Host 'Serena MCP did not initialize. Tail:'
+          if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
+          exit 1
+        }
+
+        # Expose to later steps
         "SERENA_URL=$uri" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+
 
     - name: Run AI Code Review
       shell: pwsh
