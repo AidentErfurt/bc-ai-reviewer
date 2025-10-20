@@ -197,15 +197,28 @@ runs:
 
         $uri = "http://127.0.0.1:$port/mcp"
 
+        # tiny head start for the server
+        Start-Sleep -Seconds 1
+
         # 1) Establish a streamable-http session (GET with SSE accept)
         $sessionId = $null
-        for ($i=1; $i -le 10 -and -not $sessionId; $i++) {
-          $resp = Invoke-WebRequest -Method GET -Uri $uri `
-                  -Headers @{ Accept = 'text/event-stream' } `
-                  -TimeoutSec 5 -SkipHttpErrorCheck
-          $sessionId = $resp.Headers['Mcp-Session-Id']
+        $maxTries = 60
+        for ($i=1; $i -le $maxTries -and -not $sessionId; $i++) {
+          try {
+            $resp = Invoke-WebRequest -Method GET -Uri $uri `
+                    -Headers @{ Accept = 'text/event-stream' } `
+                    -TimeoutSec 3 -SkipHttpErrorCheck
+            $sessionId = $resp.Headers['Mcp-Session-Id']
+          } catch {
+            # Connection refused or non-HTTP transport errors; still try to read headers if any
+            if ($_.Exception.Response) {
+              $hdrs = $_.Exception.Response.Headers
+              $sessionId = $hdrs['Mcp-Session-Id']
+            }
+          }
           if (-not $sessionId) { Start-Sleep -Seconds 1 }
         }
+
         if (-not $sessionId) {
           Write-Host 'Serena MCP failed to start (no Mcp-Session-Id). Tail:'
           if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
