@@ -199,24 +199,13 @@ runs:
 
         # 1) Establish a streamable-http session (GET with SSE accept)
         $sessionId = $null
-        $maxTries = 60
-        for ($i=1; $i -le $maxTries; $i++) {
-          try {
-            # Some servers return 200 with headers; others may hold the stream open.
-            $resp = Invoke-WebRequest -Method GET -Uri $uri -Headers @{ Accept = 'text/event-stream' } -TimeoutSec 3
-            $sessionId = $resp.Headers['Mcp-Session-Id']
-          } catch {
-            # If the stream upgrade triggers a non-200, still try to read headers
-            if ($_.Exception.Response) {
-              $hdrs = $_.Exception.Response.Headers
-              $sessionId = $hdrs['Mcp-Session-Id']
-              if (-not $sessionId) { $sessionId = $hdrs['MCP-Session-Id'] }
-            }
-          }
-          if ($sessionId) { break }
-          Start-Sleep -Seconds 1
+        for ($i=1; $i -le 10 -and -not $sessionId; $i++) {
+          $resp = Invoke-WebRequest -Method GET -Uri $uri `
+                  -Headers @{ Accept = 'text/event-stream' } `
+                  -TimeoutSec 5 -SkipHttpErrorCheck
+          $sessionId = $resp.Headers['Mcp-Session-Id']
+          if (-not $sessionId) { Start-Sleep -Seconds 1 }
         }
-
         if (-not $sessionId) {
           Write-Host 'Serena MCP failed to start (no Mcp-Session-Id). Tail:'
           if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
@@ -226,9 +215,9 @@ runs:
         # 2) Initialize JSON-RPC over POST with the session header
         $body = @{
           jsonrpc = "2.0"
-          id = "1"
-          method = "initialize"
-          params = @{
+          id      = "1"
+          method  = "initialize"
+          params  = @{
             protocolVersion = "2024-10-07"
             capabilities    = @{}
           }
@@ -253,7 +242,6 @@ runs:
 
         # Expose to later steps
         "SERENA_URL=$uri" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
-
 
     - name: Run AI Code Review
       shell: pwsh
