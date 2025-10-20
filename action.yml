@@ -197,35 +197,37 @@ runs:
 
         $uri = "http://127.0.0.1:$port/mcp"
 
-        # tiny head start for the server
+        # Give the server a moment to bind
         Start-Sleep -Seconds 1
 
-        # 1) Establish a streamable-http session (GET with SSE accept)
+        # Start the SSE (must stay open!) and capture response headers
+        $hdrFile = "/tmp/mcp.headers"
+        bash -lc "rm -f $hdrFile; nohup curl -sS -N -H 'Accept: text/event-stream' -D $hdrFile $uri >/dev/null 2>&1 & echo \$! > /tmp/mcp_sse.pid"
+
+        # Wait for the Mcp-Session-Id to appear in headers (case-insensitive)
         $sessionId = $null
         $maxTries = 60
         for ($i=1; $i -le $maxTries -and -not $sessionId; $i++) {
-          try {
-            $resp = Invoke-WebRequest -Method GET -Uri $uri `
-                    -Headers @{ Accept = 'text/event-stream' } `
-                    -TimeoutSec 3 -SkipHttpErrorCheck
-            $sessionId = $resp.Headers['Mcp-Session-Id']
-          } catch {
-            # Connection refused or non-HTTP transport errors; still try to read headers if any
-            if ($_.Exception.Response) {
-              $hdrs = $_.Exception.Response.Headers
-              $sessionId = $hdrs['Mcp-Session-Id']
+          if (Test-Path $hdrFile) {
+            $lines = Get-Content $hdrFile
+            foreach ($line in $lines) {
+              if ($line -match '^\s*(?i:mcp-session-id)\s*:\s*(\S+)\s*$') {
+                $sessionId = $Matches[1]
+                break
+              }
             }
           }
           if (-not $sessionId) { Start-Sleep -Seconds 1 }
         }
 
         if (-not $sessionId) {
-          Write-Host 'Serena MCP failed to start (no Mcp-Session-Id). Tail:'
+          Write-Host 'Serena MCP failed to start (no Mcp-Session-Id in SSE headers). Tail:'
           if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
+          if (Test-Path $hdrFile) { Write-Host '--- /tmp/mcp.headers ---'; Get-Content $hdrFile }
           exit 1
         }
 
-        # 2) Initialize JSON-RPC over POST with the session header
+        # Initialize JSON-RPC over POST with the session header (SSE must still be connected)
         $body = @{
           jsonrpc = "2.0"
           id      = "1"
@@ -242,19 +244,23 @@ runs:
             $resp = Invoke-RestMethod -Method Post -Uri $uri `
               -ContentType 'application/json' `
               -Headers @{ Accept='application/json'; 'Mcp-Session-Id' = $sessionId } `
-              -Body $body -TimeoutSec 5
+              -Body $body -TimeoutSec 10
             if ($resp -and $resp.result) { $ok = $true; break }
-          } catch { Start-Sleep -Seconds 1 }
+          } catch {
+            Start-Sleep -Seconds 1
+          }
         }
 
         if (-not $ok) {
           Write-Host 'Serena MCP did not initialize. Tail:'
           if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
+          if (Test-Path $hdrFile) { Write-Host '--- /tmp/mcp.headers ---'; Get-Content $hdrFile }
           exit 1
         }
 
         # Expose to later steps
         "SERENA_URL=$uri" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+
 
     - name: Run AI Code Review
       shell: pwsh
