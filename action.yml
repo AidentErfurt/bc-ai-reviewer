@@ -186,16 +186,58 @@ runs:
         python3 -m pip install --user mcp-cli || pipx install mcp-cli
         echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-    - name: Smoke test Serena via MCP (stdio)
+    - name: Configure mcp-cli server (Serena via stdio)
       shell: bash
       run: |
         set -euo pipefail
-        # mcp-cli launches the server cmd and speaks MCP over stdio
-        SERVER_CMD="uvx --from git+https://github.com/oraios/serena serena start-mcp-server --transport stdio"
-        # List tools to prove initialize->capabilities exchange works
-        mcp-cli --server "$SERVER_CMD" tools | tee /tmp/mcp.tools
-        # Optionally call a trivial tool to validate request/response
-        mcp-cli --server "$SERVER_CMD" call get_current_config | tee /tmp/mcp.get_current_config.json
+
+        # Ensure config dir exists
+        mkdir -p "$HOME/.config/mcp-cli"
+
+        # Create server_config.json so mcp-cli knows how to start Serena
+        cat > "$HOME/.config/mcp-cli/server_config.json" <<'JSON'
+        {
+          "servers": {
+            "serena": {
+              "command": "uvx",
+              "args": [
+                "--from", "git+https://github.com/oraios/serena",
+                "serena", "start-mcp-server",
+                "--transport", "stdio"
+              ]
+            }
+          }
+        }
+        JSON
+
+        echo "Wrote $(wc -c < "$HOME/.config/mcp-cli/server_config.json") bytes to server_config.json"
+        echo "---- server_config.json ----"
+        cat "$HOME/.config/mcp-cli/server_config.json"
+
+    - name: Smoke test Serena via mcp-cli
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        echo "mcp-cli version:"
+        mcp-cli --version || true
+        echo
+
+        echo "Servers (should list 'serena'):"
+        mcp-cli servers || true
+        echo
+
+        echo "Ping server:"
+        mcp-cli ping serena
+        echo
+
+        echo "List tools (should show 20+ Serena tools):"
+        mcp-cli tools serena
+        echo
+
+        echo "Call a trivial tool to verify request/response (adjust if names differ):"
+        # Example: list_dir at repo root – safe + low-perm
+        mcp-cli tools call serena list_dir --params '{"path":"."}' | sed -e 's/.*/[TOOL OUT] &/'
 
 
     # # install uv only when we need a local Serena
