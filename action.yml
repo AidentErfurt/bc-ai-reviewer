@@ -193,7 +193,7 @@ runs:
         # mcp-cli launches the server cmd and speaks MCP over stdio
         SERVER_CMD="uvx --from git+https://github.com/oraios/serena serena start-mcp-server --transport stdio"
         # List tools to prove initialize->capabilities exchange works
-        mcp-cli --server "$SERVER_CMD" list-tools | tee /tmp/mcp.tools
+        mcp-cli --server "$SERVER_CMD" tools | tee /tmp/mcp.tools
         # Optionally call a trivial tool to validate request/response
         mcp-cli --server "$SERVER_CMD" call get_current_config | tee /tmp/mcp.get_current_config.json
 
