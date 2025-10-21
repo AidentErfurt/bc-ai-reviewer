@@ -154,7 +154,7 @@ inputs:
   SERENA_TIMEOUT_SEC:
     description: "HTTP timeout (seconds) for Serena tool calls"
     type: number
-    default: 20
+    default: 60
   SERENA_MAX_REFS:
     description: "Cap for where-used references per symbol"
     type: number
@@ -222,7 +222,7 @@ runs:
         MCP_CLI_LOG=debug MCP_CLI_CONFIG="$PWD/server_config.json" mcp-cli servers -d -t || true
 
         echo "== Tools (serena) =="
-        MCP_CLI_LOG=debug MCP_CLI_CONFIG="$PWD/server_config.json" mcp-cli tools --server serena -all || true
+        MCP_CLI_LOG=debug MCP_CLI_CONFIG="$PWD/server_config.json" mcp-cli tools --server serena --all || true
 
         echo "== Processes =="
         ps -ef | grep -E 'serena|uvx|python|mcp' | grep -v grep || true
