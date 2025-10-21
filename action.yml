@@ -186,62 +186,62 @@ runs:
         python3 -m pip install --user mcp-cli || pipx install mcp-cli
         echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-- name: mcp-cli + Serena (stdio) end-to-end with fallbacks
-  shell: bash
-  env:
-    MCP_CLI_LOG: debug
-    MCP_CLI_CONFIG: server_config.json
-    run: |
-      set -euo pipefail
-      cd "$GITHUB_WORKSPACE"
+    - name: mcp-cli + Serena (stdio) end-to-end with fallbacks
+      shell: bash
+      env:
+        MCP_CLI_LOG: debug
+        MCP_CLI_CONFIG: server_config.json
+      run: |
+        set -euo pipefail
+        cd "$GITHUB_WORKSPACE"
 
-      # Write both config shapes and enable the server
-      cat > server_config.json <<'JSON'
-      {
-        "servers": [
-          {
-            "name": "serena",
-            "enabled": true,
-            "command": "uvx",
-            "args": [
-              "--from", "git+https://github.com/oraios/serena",
-              "serena", "start-mcp-server",
-              "--transport", "stdio"
-            ]
-          }
-        ]
-      }
-      JSON
-      mkdir -p "$HOME/.config/mcp-cli"
-      cat > "$HOME/.config/mcp-cli/config.json" <<'JSON'
-      {
-        "enabledServers": ["serena"],
-        "servers": {
-          "serena": {
-            "command": "uvx",
-            "args": [
-              "--from", "git+https://github.com/oraios/serena",
-              "serena", "start-mcp-server",
-              "--transport", "stdio"
-            ]
+        # Write both config shapes and enable the server
+        cat > server_config.json <<'JSON'
+        {
+          "servers": [
+            {
+              "name": "serena",
+              "enabled": true,
+              "command": "uvx",
+              "args": [
+                "--from", "git+https://github.com/oraios/serena",
+                "serena", "start-mcp-server",
+                "--transport", "stdio"
+              ]
+            }
+          ]
+        }
+        JSON
+        mkdir -p "$HOME/.config/mcp-cli"
+        cat > "$HOME/.config/mcp-cli/config.json" <<'JSON'
+        {
+          "enabledServers": ["serena"],
+          "servers": {
+            "serena": {
+              "command": "uvx",
+              "args": [
+                "--from", "git+https://github.com/oraios/serena",
+                "serena", "start-mcp-server",
+                "--transport", "stdio"
+              ]
+            }
           }
         }
-      }
-      JSON
+        JSON
 
-      echo "== Servers =="
-      mcp-cli servers || true
+        echo "== Servers =="
+        mcp-cli servers || true
 
-      echo "== Tools =="
-      mcp-cli tools || true
-      mcp-cli tools --server serena || true
+        echo "== Tools =="
+        mcp-cli tools || true
+        mcp-cli tools --server serena || true
 
-      echo "== Calls =="
-      mcp-cli tools call get_current_config --server serena || true
-      mcp-cli tools call list_dir --server serena --params '{"path":"."}' || true
+        echo "== Calls =="
+        mcp-cli tools call get_current_config --server serena || true
+        mcp-cli tools call list_dir --server serena --params '{"path":"."}' || true
 
-      echo "== pstable =="
-      ps -ef | grep -E 'serena|uvx|python|mcp' | grep -v grep || true
+        echo "== pstable =="
+        ps -ef | grep -E 'serena|uvx|python|mcp' | grep -v grep || true
 
 
     # # install uv only when we need a local Serena
