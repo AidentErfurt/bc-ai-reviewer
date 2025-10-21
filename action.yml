@@ -202,18 +202,24 @@ runs:
 
         # Start the SSE (must stay open!) and capture response headers
         $hdrFile = "/tmp/mcp.headers"
-        bash -lc "rm -f $hdrFile; nohup curl -sS -N -H 'Accept: text/event-stream' -D $hdrFile $uri >/dev/null 2>&1 & echo \$! > /tmp/mcp_sse.pid"
+        $curlLog = "/tmp/mcp_sse.err"
+        bash -lc @"
+        rm -f $hdrFile $curlLog
+        # Retry until the server is listening, then stay connected
+        nohup curl -sS -N \
+          --retry 60 --retry-delay 1 --retry-connrefused \
+          -H 'Accept: text/event-stream' -H 'Cache-Control: no-cache' \
+          -D $hdrFile $uri >/dev/null 2>$curlLog & echo \$! > /tmp/mcp_sse.pid
+        "@
 
         # Wait for the Mcp-Session-Id to appear in headers (case-insensitive)
         $sessionId = $null
-        $maxTries = 60
+        $maxTries = 120
         for ($i=1; $i -le $maxTries -and -not $sessionId; $i++) {
-          if (Test-Path $hdrFile) {
-            $lines = Get-Content $hdrFile
-            foreach ($line in $lines) {
+          if (Test-Path $hdrFile -PathType Leaf) {
+            foreach ($line in Get-Content $hdrFile) {
               if ($line -match '^\s*(?i:mcp-session-id)\s*:\s*(\S+)\s*$') {
-                $sessionId = $Matches[1]
-                break
+                $sessionId = $Matches[1]; break
               }
             }
           }
@@ -224,6 +230,9 @@ runs:
           Write-Host 'Serena MCP failed to start (no Mcp-Session-Id in SSE headers). Tail:'
           if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
           if (Test-Path $hdrFile) { Write-Host '--- /tmp/mcp.headers ---'; Get-Content $hdrFile }
+          if (Test-Path $curlLog) { Write-Host '--- /tmp/mcp_sse.err ---'; Get-Content $curlLog -Tail 100 }
+          # Show whether the SSE curl is actually running
+          bash -lc "test -f /tmp/mcp_sse.pid && ps -o pid,cmd -p \$(cat /tmp/mcp_sse.pid) || true"
           exit 1
         }
 
