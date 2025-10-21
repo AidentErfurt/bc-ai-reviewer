@@ -524,6 +524,8 @@ closingIssuesReferences(first: 50) {
     #########################################################
     
     function New-Review {
+        param($review, $inline)
+        
         if ($review.summary.Length -gt 65000) {
             $review.summary = $review.summary.Substring(0,65000) + "`n...(truncated)"
         }
@@ -870,8 +872,9 @@ Respond **only** with:
             [int]$Max = 50
         )
         $res = Invoke-SerenaTool -ToolName 'find_referencing_symbols' -Arguments @{ name_path = $NamePath }
-        if (-not $res) { return @() }
-        return @($res)[0..([math]::Min($Max, @($res).Count) - 1)]
+        $arr = @($res)                 # normalize
+        if ($null -eq $arr -or $arr.Count -eq 0) { return @() }
+        return $arr | Select-Object -First ([math]::Min($Max, $arr.Count))
     }
 
     ############################################################################
@@ -1108,7 +1111,7 @@ Process {
         }
     )
 
-    if (-not $relevant) {
+    if ($relevant.Count -eq 0) {
         Write-Host "No relevant files to review"
         return
     }
@@ -1121,6 +1124,17 @@ Process {
             -f $maxFiles, $relevant.Count
         )
         $relevant = $relevant[0..($maxFiles - 1)]
+    }
+
+    # Build validLines (which target lines are valid to comment on (head ln2))
+    $validLines = @{}
+    foreach ($f in $relevant) {
+    $lines = foreach ($chunk in $f.chunks) {
+        foreach ($chg in $chunk.changes) {
+        if ($chg.ln2) { [int]$chg.ln2 }  # head-side only
+        }
+    }
+    $validLines[$f.path] = $lines | Sort-Object -Unique
     }
 
     ############################################################################
@@ -1194,8 +1208,9 @@ Process {
         }
 
         # Determine changed symbol defs near touched lines
-        $touched = @($validLines[$f.path])
-        $defs    = Get-AlChangedSymbols -Text $headContent -TouchedLines $touched
+        $touched = @()
+        if ($validLines.ContainsKey($f.path)) { $touched = @($validLines[$f.path]) }
+        $defs = Get-AlChangedSymbols -Text $headContent -TouchedLines $touched
 
         foreach ($d in $defs) {
             # Rich snippet: grab a reasonable block around definition start
@@ -1512,19 +1527,6 @@ Example of an empty-but-valid result:
         head        = $pr.head.sha
     }
 
-    # Build a "validLines" whitelist:  { <path> = @(line1,line2,...) }
-    $validLines = @{}
-    foreach ($f in $relevant) {
-        $lines = foreach ($chunk in $f.chunks) {
-            foreach ($chg in $chunk.changes) {
-                if ($chg.ln2) {   # use head-side line numbers only
-                    [int]$chg.ln2
-                }
-            }
-        }
-        $validLines[$f.path] = $lines | Sort-Object -Unique
-    }
-
     # Build a number-prefixed diff for each file
     $numberedFiles = foreach ($f in $relevant) {
         # collect each change line with its target line number.
@@ -1643,43 +1645,21 @@ Example of an empty-but-valid result:
     # 8. Map inline comments & submit review
     ########################################################################
 
-    # Build inline comment objects
-    $validLines = @{}
-    $relevant | ForEach-Object {
-        $validLines[$_.path] = @($_.chunks.changes |
-            Where-Object ln2 | ForEach-Object ln2)   # head-side line numbers
-    }
-
-    $sideMap    = @{}            # remembers whether a line is on LEFT or RIGHT
+    # for a given file+line, which side LEFT or RIGHT does GitHub expect?
+    $sideMap = @{}
 
     foreach ($f in $relevant) {
-        $lines   = @()
-        $sides   = @{}
-        foreach ($chunk in $f.chunks) {
-            foreach ($chg in $chunk.changes) {
-                switch ($chg.type) {
-                    'add'   {            # added line  -> RIGHT  / ln2
-                        $ln = [int]$chg.ln2
-                        $lines += $ln
-                        $sides[$ln] = 'RIGHT'
-                    }
-                    'del'   {            # deleted line -> LEFT  / ln
-                        $ln = [int]$chg.ln
-                        $lines += $ln  
-                        $sides[$ln] = 'LEFT'
-                    }
-                    default {            # unchanged context line -> commentable on RIGHT
-                        if ($chg.ln2) {
-                            $ln = [int]$chg.ln2
-                            $lines += $ln   
-                            $sides[$ln] = 'RIGHT'
-                        }
-                    }
-                }
-            }
+    $sides = @{}
+    foreach ($chunk in $f.chunks) {
+        foreach ($chg in $chunk.changes) {
+        switch ($chg.type) {
+            'add' { $sides[[int]$chg.ln2] = 'RIGHT' }
+            'del' { $sides[[int]$chg.ln]  = 'LEFT'  }
+            default { if ($chg.ln2) { $sides[[int]$chg.ln2] = 'RIGHT' } }
         }
-        $validLines[$f.path] = $lines | Sort-Object -Unique
-        $sideMap[$f.path] = $sides
+        }
+    }
+    $sideMap[$f.path] = $sides
     }
 
     $inline = @(
@@ -1717,7 +1697,7 @@ Example of an empty-but-valid result:
 
     try {
         # first attempt: summary + inline comments
-        $reviewResponse = New-Review
+        $reviewResponse = New-Review -review $review -inline $inline
         Write-Host "Review (with inlines) posted: $($reviewResponse.html_url)"
 
     }
@@ -1742,7 +1722,7 @@ Example of an empty-but-valid result:
 
             try {
                 $inline = @()                  # summary-only retry
-                $reviewResponse = New-Review
+                $reviewResponse = New-Review -review $review -inline $inline
                 Write-Host "Summary-only review posted: $($reviewResponse.html_url)"
             }
             catch {
