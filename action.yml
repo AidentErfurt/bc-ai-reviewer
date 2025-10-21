@@ -196,12 +196,10 @@ runs:
         bash -lc "nohup $cmd > /tmp/serena.log 2>&1 & echo \$! > /tmp/serena.pid"
         $uri = "http://127.0.0.1:$port/mcp"
 
-        # tiny head start
-        Start-Sleep -Seconds 1
-
-        # --- 1) Handshake: GET once to obtain the session id (server answers 400 + header) ---
+        # --- 1) Handshake: GET once to obtain the session id (server replies 400 + header) ---
         $hsHdr = "/tmp/mcp.handshake.headers"
-        bash -lc "rm -f $hsHdr; curl -sS -D $hsHdr -o /dev/null -H 'Accept: text/event-stream' $uri || true"
+        # retry until the server binds; allow 400 since it's expected here
+        bash -lc "rm -f $hsHdr; curl -sS --retry 120 --retry-delay 1 --retry-connrefused -D $hsHdr -o /dev/null -H 'Accept: text/event-stream' $uri || true"
 
         $sessionId = $null
         if (Test-Path $hsHdr -PathType Leaf) {
@@ -212,23 +210,25 @@ runs:
         if (-not $sessionId) {
           Write-Host 'Serena MCP handshake failed (no Mcp-Session-Id). Tail:'
           if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
-          if (Test-Path $hsHdr)       { Write-Host '--- /tmp/mcp.handshake.headers ---'; Get-Content $hsHdr }
+          if (Test-Path $hsHdr)          { Write-Host '--- /tmp/mcp.handshake.headers ---'; Get-Content $hsHdr }
+          bash -lc "test -f /tmp/serena.pid && ps -o pid,cmd -p \$(cat /tmp/serena.pid) || true"
           exit 1
         }
 
-        # --- 2) Open the persistent SSE bound to that session id (this one must stay open) ---
+        # --- 2) Open the persistent SSE bound to that session id (must stay open) ---
         $hdrFile = "/tmp/mcp.sse.headers"
         $curlLog = "/tmp/mcp_sse.err"
         bash -lc @"
         nohup curl -sS -N \
+          --retry 120 --retry-delay 1 --retry-connrefused \
           -H 'Accept: text/event-stream' \
           -H 'Mcp-Session-Id: $sessionId' \
           -D $hdrFile $uri >/tmp/mcp_sse.out 2>$curlLog & echo \$! > /tmp/mcp_sse.pid
         "@
 
-        # Wait up to ~30s for the SSE to report 200 OK
+        # Wait for the SSE to report 200 OK
         $okSse = $false
-        for ($i=1; $i -le 30 -and -not $okSse; $i++) {
+        for ($i=1; $i -le 60 -and -not $okSse; $i++) {
           if (Test-Path $hdrFile -PathType Leaf) {
             if ((Select-String -Quiet -Path $hdrFile -Pattern '^HTTP/1\.1 200')) { $okSse = $true; break }
           }
@@ -238,7 +238,7 @@ runs:
           Write-Host 'Serena MCP SSE did not establish (no 200). Tail:'
           if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
           if (Test-Path $hdrFile)        { Write-Host '--- /tmp/mcp.sse.headers ---'; Get-Content $hdrFile }
-          if (Test-Path $curlLog)        { Write-Host '--- /tmp/mcp_sse.err ---';    Get-Content $curlLog -Tail 100 }
+          if (Test-Path $curlLog)        { Write-Host '--- /tmp/mcp_sse.err ---'; Get-Content $curlLog -Tail 100 }
           bash -lc "test -f /tmp/mcp_sse.pid && ps -o pid,cmd -p \$(cat /tmp/mcp_sse.pid) || true"
           exit 1
         }
@@ -269,7 +269,8 @@ runs:
         }
 
         # Expose to later steps
-        "SERENA_URL=$uri" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+        "SERENA_URL=$uri"         | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+        "SERENA_SESSION_ID=$sessionId" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
 
     - name: Run AI Code Review
       shell: pwsh
