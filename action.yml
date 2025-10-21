@@ -224,11 +224,38 @@ runs:
         echo "== Tools (serena) =="
         MCP_CLI_LOG=debug MCP_CLI_CONFIG="$PWD/server_config.json" mcp-cli tools --server serena --all || true
 
+        echo "== Discover & activate BC apps in Serena =="
+
+        # Find every app.json in the repo (handles spaces safely)
+        mapfile -d '' APPS < <(find "$GITHUB_WORKSPACE" -type f -name app.json -print0)
+
+        if ((${#APPS[@]}==0)); then
+          echo "No app.json found under $GITHUB_WORKSPACE"
+        else
+          # Use jq to build JSON safely for paths with spaces
+          for app in "${APPS[@]}"; do
+            proj_dir="$(dirname "$app")"
+            echo "Activating Serena project: $proj_dir"
+            params="$(jq -cn --arg p "$proj_dir" '{project:$p}')"
+            MCP_CLI_LOG=debug MCP_CLI_CONFIG="$PWD/server_config.json" \
+              mcp-cli call --server serena activate_project --params "$params" || true
+          done
+        fi
+
+        echo "== Confirm Serena sees projects =="
+        MCP_CLI_LOG=debug MCP_CLI_CONFIG="$PWD/server_config.json" \
+          mcp-cli call --server serena get_current_config --params '{}' || true
+
         echo "== Processes =="
         ps -ef | grep -E 'serena|uvx|python|mcp' | grep -v grep || true
 
         echo "== App Log =="
         MCP_CLI_LOG=trace mcp-cli tools --server serena --all | grep -E "app|project|detected" || true
+
+        nohup uvx --from git+https://github.com/oraios/serena \
+          serena start-mcp-server --transport streamable-http --port 5173 \
+          > /tmp/serena_http.log 2>&1 &
+        echo "SERENA_URL=http://127.0.0.1:5173/mcp" >> "$GITHUB_ENV"
 
     - name: Run AI Code Review
       shell: pwsh
