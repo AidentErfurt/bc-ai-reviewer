@@ -179,6 +179,7 @@ runs:
       run: npm install --no-save parse-diff@latest
 
     - name: Install uv + mcp-cli
+      shell: bash
       run: |
         curl -LsSf https://astral.sh/uv/install.sh | sh
         echo "$HOME/.local/bin" >> $GITHUB_PATH
@@ -186,6 +187,7 @@ runs:
         echo "$HOME/.local/bin" >> $GITHUB_PATH
 
     - name: Smoke test Serena via MCP (stdio)
+      shell: bash
       run: |
         set -euo pipefail
         # mcp-cli launches the server cmd and speaks MCP over stdio
