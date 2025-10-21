@@ -71,43 +71,38 @@ inputs:
     description: "Architecture / guidelines text"
     type: string
     default: ""
-
   CONTEXT_FILES:
     description: "Comma-separated globs fetched for context"
     type: string
     default: ""
-
   INCLUDE_PATTERNS:
     description: "Comma-separated globs to include in review"
     type: string
     default: "**/*.al,**/*.xlf,**/*.json"
-
   EXCLUDE_PATTERNS:
     description: "Comma-separated globs to exclude"
     type: string
     default: ""
-  
-  # Fetch linked issues
+
+  # Issues context
   ISSUE_COUNT:
     description: "Max linked issues to fetch (0 = all)"
     type: number
     default: 0
-
   FETCH_CLOSED_ISSUES:
     description: "Include closed issues as context"
     type: boolean
     default: true
 
+  # App detection
   AUTO_DETECT_APPS:
     description: "Enable automatic app.json discovery"
     type: boolean
     default: true
-
   INCLUDE_APP_PERMISSIONS:
     description: "Include *.PermissionSet.al / *.Entitlement.al from each app"
     type: boolean
     default: true
-
   INCLUDE_APP_MARKDOWN:
     description: "Include *.md files from each app"
     type: boolean
@@ -117,54 +112,47 @@ inputs:
   GUIDELINE_RULES_PATH:
     description: "Path to JSON or PSD1 file defining custom AL-Guideline rules"
     type: string
-    required: false
     default: ""
-
   DISABLE_GUIDELINEDOCS:
     description: "Skip fetching the official AL-Guidelines docs"
     type: boolean
     default: false
 
+  # Prompting
   INCLUDE_CHANGED_FILES_AS_CONTEXT:
     description: "Ship every file that is touched by the PR to the LLM as an extra context file"
     type: boolean
     default: false
-
   PROMPT_STYLE:
-    description: "auto | gpt5 | generic - use GPT-5-optimized prompt when 'gpt-5*' model. 'generic' forces legacy prompt."
+    description: "auto | gpt5 | generic"
     type: string
     default: "auto"
-
   REASONING_EFFORT:
-    description: "low | medium | high - hint for GPT-5 reasoning depth; ignored by other models."
+    description: "low | medium | high"
     type: string
     default: "medium"
-
   LOG_PROMPT:
     description: "Log full prompt (diff + context) to runner logs"
     type: boolean
     default: false
 
+  # Serena (MCP over HTTP)
   ENABLE_SERENA:
     description: "Enable Serena MCP enrichment (symbols, where-used, rich snippets)"
     type: boolean
     default: false
-
   SERENA_URL:
-    description: "Serena MCP HTTP endpoint (e.g., http://host:5173/mcp)"
+    description: "Serena MCP HTTP endpoint (e.g., http://host:5173/mcp). If empty, this action starts a local instance."
     type: string
     default: ""
-
   SERENA_TIMEOUT_SEC:
     description: "HTTP timeout (seconds) for Serena tool calls"
     type: number
     default: 60
-
   SERENA_MAX_REFS:
     description: "Cap for where-used references per symbol"
     type: number
     default: 50
-
   SERENA_SYMBOL_DEPTH:
     description: "Depth for find_symbol (0 = symbol only)"
     type: number
@@ -183,95 +171,65 @@ runs:
       working-directory: ${{ github.action_path }}
       run: npm install --no-save parse-diff@latest
 
-    - name: Install uv + mcp-cli
-      shell: bash
-      run: |
-        set -euo pipefail
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-        python3 -m pip install --user mcp-cli || pipx install mcp-cli
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-        # jq is usually present, but install if missing
-        if ! command -v jq >/dev/null 2>&1; then
-          sudo apt-get update -y
-          sudo apt-get install -y jq
-        fi
-
-    - name: Configure mcp-cli + app.json activation debug
-      shell: bash
-      env:
-        MCP_CLI_CONFIG:      ${{ github.workspace }}/server_config.json
-        MCP_CLI_CONFIG_PATH: ${{ github.workspace }}/server_config.json
-        MCP_CLI_LOG:         warn
-      run: |
-        set -euo pipefail
-        cd "$GITHUB_WORKSPACE"
-
-        # Minimal stdio server config for mcp-cli (debug/activation only)
-        cat > server_config.json <<'JSON'
-        {
-          "mcpServers": {
-            "serena": {
-              "enabled": true,
-              "command": "uvx",
-              "args": [
-                "--from", "git+https://github.com/oraios/serena",
-                "serena", "start-mcp-server",
-                "--transport", "stdio"
-              ],
-              "env": { "PYTHONUNBUFFERED": "1" }
-            }
-          }
-        }
-        JSON
-
-        mkdir -p "$HOME/.config/mcp-cli"
-        cp server_config.json "$HOME/.config/mcp-cli/server_config.json"
-
-        echo "== Discover & activate BC apps in Serena =="
-
-        # Choose the correct tools subcommand (call/invoke/run/exec/execute)
-        CALL_SUBCMD=""
-        for sub in call invoke run exec execute; do
-          if mcp-cli tools "$sub" --help >/dev/null 2>&1; then CALL_SUBCMD="$sub"; break; fi
-        done
-        if [ -z "$CALL_SUBCMD" ]; then
-          echo "mcp-cli: no supported 'tools' subcommand found (tried call/invoke/run/exec/execute)"; exit 1
-        fi
-
-        # Find every app.json (handles spaces)
-        mapfile -d '' APPS < <(find "$GITHUB_WORKSPACE" -type f -name app.json -print0)
-
-        if ((${#APPS[@]}==0)); then
-          echo "No app.json found under $GITHUB_WORKSPACE"
-        else
-          for app in "${APPS[@]}"; do
-            proj_dir="$(dirname "$app")"
-            echo "Activating Serena project: $proj_dir"
-            params="$(jq -cn --arg p "$proj_dir" '{project:$p}')"
-            MCP_CLI_LOG=debug MCP_CLI_CONFIG="$PWD/server_config.json" \
-              mcp-cli tools "$CALL_SUBCMD" --server serena activate_project --params "$params" || true
-
-            # Light sanity checks on the active project view
-            echo "== Serena list_dir (project root) =="
-            MCP_CLI_LOG=warn MCP_CLI_CONFIG="$PWD/server_config.json" \
-              mcp-cli tools "$CALL_SUBCMD" --server serena list_dir --params '{"relative_path":""}' || true
-
-            echo "== Serena find_file (**/*.al) =="
-            MCP_CLI_LOG=warn MCP_CLI_CONFIG="$PWD/server_config.json" \
-              mcp-cli tools "$CALL_SUBCMD" --server serena find_file --params '{"pattern":"**/*.al"}' || true
-          done
-        fi
-
-    - name: Start Serena HTTP server (for the reviewer)
+    # --- Serena HTTP: install + start + wait + debug(app.json) ---
+    - name: Install & Start Serena (HTTP)
       if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
-      shell: bash
+      shell: pwsh
       run: |
-        set -euo pipefail
-        nohup uvx --from git+https://github.com/oraios/serena \
-          serena start-mcp-server --transport streamable-http --port 5173 \
-          > /tmp/serena_http.log 2>&1 & echo $! > /tmp/serena_http.pid
-        echo "SERENA_URL=http://127.0.0.1:5173/mcp" >> "$GITHUB_ENV"
+        # Ensure local bin on PATH for current + later steps
+        "$HOME/.local/bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding ascii
+        $env:PATH = "$HOME/.local/bin" + [IO.Path]::PathSeparator + $env:PATH
+
+        # Install pipx if needed
+        if (-not (Get-Command pipx -ErrorAction SilentlyContinue)) {
+          python3 -m pip install --user pipx
+        }
+
+        # Install Serena CLI if missing
+        if (-not (Get-Command serena -ErrorAction SilentlyContinue)) {
+          python3 -m pipx install "git+https://github.com/oraios/serena"
+        }
+
+        # Start Serena HTTP server
+        $port = 5173
+        $SerenaUrl = "http://127.0.0.1:$port/mcp"
+        $serenaPath = (Get-Command serena -ErrorAction Stop).Source
+
+        $out = "/tmp/serena_http.out"
+        $err = "/tmp/serena_http.err"
+        $proc = Start-Process -FilePath $serenaPath `
+                              -ArgumentList @('start-mcp-server','--transport','streamable-http','--port',"$port") `
+                              -PassThru -NoNewWindow `
+                              -RedirectStandardOutput $out -RedirectStandardError $err
+        $proc.Id | Out-File /tmp/serena_http.pid -Encoding ascii
+        Write-Host "Serena PID: $($proc.Id)"
+
+        # Wait until the HTTP endpoint exposes the MCP-SID header
+        $ready = $false
+        for ($i=1; $i -le 60 -and -not $ready; $i++) {
+          try {
+            $r = Invoke-WebRequest -Uri $SerenaUrl -Method GET -Headers @{Accept='text/event-stream'} -SkipHttpErrorCheck -TimeoutSec 2 -ErrorAction Stop
+            if ($r.Headers['Mcp-Session-Id']) { $ready = $true; break }
+          } catch { Start-Sleep -Seconds 1 }
+        }
+        if (-not $ready) {
+          Write-Host "Serena HTTP did not become ready. Tail logs:"
+          if (Test-Path $err) { Get-Content $err -Tail 100 }
+          throw "Serena not ready on $SerenaUrl"
+        }
+
+        # Expose SERENA_URL for later steps
+        "SERENA_URL=$SerenaUrl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+        Write-Host "SERENA_URL set to $SerenaUrl"
+
+        # --- Debug: list discovered app.json (no activation here; activation would be session-scoped) ---
+        Write-Host "== app.json discovery =="
+        $apps = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter 'app.json' -Recurse -File -ErrorAction SilentlyContinue
+        if (-not $apps) {
+          Write-Host "No app.json found under $env:GITHUB_WORKSPACE"
+        } else {
+          $apps | ForEach-Object { Write-Host "• $($_.FullName)" }
+        }
 
     - name: Run AI Code Review
       shell: pwsh
@@ -286,7 +244,6 @@ runs:
         if ($Env:AZURE_OPENAI_ENDPOINT) { Write-Host "::add-mask::$Env:AZURE_OPENAI_ENDPOINT" }
         if ($Env:AZURE_OPENAI_API_KEY)  { Write-Host "::add-mask::$Env:AZURE_OPENAI_API_KEY" }
         if ($Env:OPENAI_API_KEY)        { Write-Host "::add-mask::$Env:OPENAI_API_KEY" }
-        
         $p = @{
           GitHubToken        = '${{ inputs.GITHUB_TOKEN }}'
           Provider           = '${{ inputs.AI_PROVIDER }}'
@@ -335,8 +292,10 @@ runs:
 
     - name: Stop Serena HTTP
       if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
-      shell: bash
+      shell: pwsh
       run: |
-        if [ -f /tmp/serena_http.pid ]; then
-          kill -TERM "$(cat /tmp/serena_http.pid)" 2>/dev/null || true
-        fi
+        if (Test-Path /tmp/serena_http.pid) {
+          $pid = Get-Content /tmp/serena_http.pid
+          Write-Host "Stopping Serena PID $pid"
+          try { Stop-Process -Id $pid -ErrorAction SilentlyContinue } catch {}
+        }
