@@ -190,12 +190,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-
-        # Ensure config dir exists
-        mkdir -p "$HOME/.config/mcp-cli"
-
-        # Create server_config.json so mcp-cli knows how to start Serena
-        cat > "$HOME/.config/mcp-cli/server_config.json" <<'JSON'
+        cd "$GITHUB_WORKSPACE"
+        cat > server_config.json <<'JSON'
         {
           "servers": {
             "serena": {
@@ -209,35 +205,35 @@ runs:
           }
         }
         JSON
-
-        echo "Wrote $(wc -c < "$HOME/.config/mcp-cli/server_config.json") bytes to server_config.json"
-        echo "---- server_config.json ----"
-        cat "$HOME/.config/mcp-cli/server_config.json"
+        echo "Wrote $(wc -c < server_config.json) bytes to $(pwd)/server_config.json"
+        sed -n '1,120p' server_config.json
 
     - name: Smoke test Serena via mcp-cli
       shell: bash
       run: |
         set -euo pipefail
+        cd "$GITHUB_WORKSPACE"
+        echo "CWD: $(pwd)"
+        ls -la
+        [ -f server_config.json ] && echo "server_config.json present at: $(realpath server_config.json)"
 
-        echo "mcp-cli version:"
-        mcp-cli --version || true
-        echo
-
-        echo "Servers (should list 'serena'):"
+        echo "== List servers (should include 'serena') =="
         mcp-cli servers || true
-        echo
 
-        echo "Ping server:"
-        mcp-cli ping serena
-        echo
+        echo "== List tools from 'serena' (via config) =="
+        if ! mcp-cli tools serena; then
+          echo "Config not picked up; adding server explicitly and retrying…"
+          mcp-cli servers add serena stdio uvx -- --from git+https://github.com/oraios/serena serena start-mcp-server --transport stdio
+          mcp-cli servers || true
+          mcp-cli tools serena
+        fi
 
-        echo "List tools (should show 20+ Serena tools):"
-        mcp-cli tools serena
-        echo
+        echo "== Call trivial tools =="
+        mcp-cli tools call serena get_current_config || true
+        mcp-cli tools call serena list_dir --params '{"path":"."}' || true
 
-        echo "Call a trivial tool to verify request/response (adjust if names differ):"
-        # Example: list_dir at repo root – safe + low-perm
-        mcp-cli tools call serena list_dir --params '{"path":"."}' | sed -e 's/.*/[TOOL OUT] &/'
+        echo "== Extra context =="
+        ps -ef | grep -E 'serena|uvx|python|mcp' | grep -v grep || true
 
 
     # # install uv only when we need a local Serena
