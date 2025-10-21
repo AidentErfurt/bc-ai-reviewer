@@ -194,57 +194,61 @@ runs:
         $port = 5173
         $cmd = 'uvx --from git+https://github.com/oraios/serena serena start-mcp-server --transport streamable-http --port {0}' -f $port
         bash -lc "nohup $cmd > /tmp/serena.log 2>&1 & echo \$! > /tmp/serena.pid"
-
         $uri = "http://127.0.0.1:$port/mcp"
 
-        # Give the server a moment to bind
+        # tiny head start
         Start-Sleep -Seconds 1
 
-        # Start the SSE (must stay open!) and capture response headers
-        $hdrFile = "/tmp/mcp.headers"
-        $curlLog = "/tmp/mcp_sse.err"
-        bash -lc @"
-        rm -f $hdrFile $curlLog
-        # Retry until the server is listening, then stay connected
-        nohup curl -sS -N \
-          --retry 60 --retry-delay 1 --retry-connrefused \
-          -H 'Accept: text/event-stream' -H 'Cache-Control: no-cache' \
-          -D $hdrFile $uri >/dev/null 2>$curlLog & echo \$! > /tmp/mcp_sse.pid
-        "@
+        # --- 1) Handshake: GET once to obtain the session id (server answers 400 + header) ---
+        $hsHdr = "/tmp/mcp.handshake.headers"
+        bash -lc "rm -f $hsHdr; curl -sS -D $hsHdr -o /dev/null -H 'Accept: text/event-stream' $uri || true"
 
-        # Wait for the Mcp-Session-Id to appear in headers (case-insensitive)
         $sessionId = $null
-        $maxTries = 120
-        for ($i=1; $i -le $maxTries -and -not $sessionId; $i++) {
-          if (Test-Path $hdrFile -PathType Leaf) {
-            foreach ($line in Get-Content $hdrFile) {
-              if ($line -match '^\s*(?i:mcp-session-id)\s*:\s*(\S+)\s*$') {
-                $sessionId = $Matches[1]; break
-              }
-            }
+        if (Test-Path $hsHdr -PathType Leaf) {
+          foreach ($line in Get-Content $hsHdr) {
+            if ($line -match '^\s*(?i:mcp-session-id)\s*:\s*(\S+)\s*$') { $sessionId = $Matches[1]; break }
           }
-          if (-not $sessionId) { Start-Sleep -Seconds 1 }
+        }
+        if (-not $sessionId) {
+          Write-Host 'Serena MCP handshake failed (no Mcp-Session-Id). Tail:'
+          if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
+          if (Test-Path $hsHdr)       { Write-Host '--- /tmp/mcp.handshake.headers ---'; Get-Content $hsHdr }
+          exit 1
         }
 
-        if (-not $sessionId) {
-          Write-Host 'Serena MCP failed to start (no Mcp-Session-Id in SSE headers). Tail:'
+        # --- 2) Open the persistent SSE bound to that session id (this one must stay open) ---
+        $hdrFile = "/tmp/mcp.sse.headers"
+        $curlLog = "/tmp/mcp_sse.err"
+        bash -lc @"
+        nohup curl -sS -N \
+          -H 'Accept: text/event-stream' \
+          -H 'Mcp-Session-Id: $sessionId' \
+          -D $hdrFile $uri >/tmp/mcp_sse.out 2>$curlLog & echo \$! > /tmp/mcp_sse.pid
+        "@
+
+        # Wait up to ~30s for the SSE to report 200 OK
+        $okSse = $false
+        for ($i=1; $i -le 30 -and -not $okSse; $i++) {
+          if (Test-Path $hdrFile -PathType Leaf) {
+            if ((Select-String -Quiet -Path $hdrFile -Pattern '^HTTP/1\.1 200')) { $okSse = $true; break }
+          }
+          Start-Sleep -Seconds 1
+        }
+        if (-not $okSse) {
+          Write-Host 'Serena MCP SSE did not establish (no 200). Tail:'
           if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
-          if (Test-Path $hdrFile) { Write-Host '--- /tmp/mcp.headers ---'; Get-Content $hdrFile }
-          if (Test-Path $curlLog) { Write-Host '--- /tmp/mcp_sse.err ---'; Get-Content $curlLog -Tail 100 }
-          # Show whether the SSE curl is actually running
+          if (Test-Path $hdrFile)        { Write-Host '--- /tmp/mcp.sse.headers ---'; Get-Content $hdrFile }
+          if (Test-Path $curlLog)        { Write-Host '--- /tmp/mcp_sse.err ---';    Get-Content $curlLog -Tail 100 }
           bash -lc "test -f /tmp/mcp_sse.pid && ps -o pid,cmd -p \$(cat /tmp/mcp_sse.pid) || true"
           exit 1
         }
 
-        # Initialize JSON-RPC over POST with the session header (SSE must still be connected)
+        # --- 3) Initialize JSON-RPC over POST using the same session id ---
         $body = @{
           jsonrpc = "2.0"
           id      = "1"
           method  = "initialize"
-          params  = @{
-            protocolVersion = "2024-10-07"
-            capabilities    = @{}
-          }
+          params  = @{ protocolVersion = "2024-10-07"; capabilities = @{} }
         } | ConvertTo-Json -Depth 5
 
         $ok = $false
@@ -255,21 +259,17 @@ runs:
               -Headers @{ Accept='application/json'; 'Mcp-Session-Id' = $sessionId } `
               -Body $body -TimeoutSec 10
             if ($resp -and $resp.result) { $ok = $true; break }
-          } catch {
-            Start-Sleep -Seconds 1
-          }
+          } catch { Start-Sleep -Seconds 1 }
         }
-
         if (-not $ok) {
           Write-Host 'Serena MCP did not initialize. Tail:'
           if (Test-Path /tmp/serena.log) { Get-Content /tmp/serena.log -Tail 200 }
-          if (Test-Path $hdrFile) { Write-Host '--- /tmp/mcp.headers ---'; Get-Content $hdrFile }
+          if (Test-Path $hdrFile)        { Write-Host '--- /tmp/mcp.sse.headers ---'; Get-Content $hdrFile }
           exit 1
         }
 
         # Expose to later steps
         "SERENA_URL=$uri" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
-
 
     - name: Run AI Code Review
       shell: pwsh
