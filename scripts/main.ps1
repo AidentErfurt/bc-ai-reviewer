@@ -167,7 +167,7 @@ function Invoke-AICodeReview {
         [string] $GuidelineRulesPath = '',
         [switch] $DisableGuidelineDocs,
         [bool] $IncludeChangedFilesAsContext = $false,
-        [switch]$LogPrompt
+        [switch]$LogPrompt,
 
         # --- Serena MCP (optional) -------------------------------------------
         [bool]  $EnableSerena       = $false,
