@@ -30,14 +30,15 @@ function Invoke-SerenaRpc {
     $Params,
     [int]$TimeoutSec = 60
   )
-  $payload = @{ jsonrpc='2.0'; id=$Id; method=$Method }
-  if ($Params -ne $null) { $payload['params'] = $Params }
-  $body    = $payload | ConvertTo-Json -Depth 20
-  $headers = New-SerenaHeaders -Sid $SessionId -Hdr $SessionHdrName
-  $resp    = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
-  $obj     = Parse-SerenaResponse -Raw ([string]$resp.Content)
-  if ($obj.error) { throw "RPC $Method failed: $($obj.error.code) $($obj.error.message)" }
-  return $obj
+    $payload = @{ jsonrpc='2.0'; id=$Id; method=$Method; params = @{} }
+    if ($Params -ne $null) { $payload['params'] = $Params }  # overwrite @{} if provided
+
+    $body    = $payload | ConvertTo-Json -Depth 20
+    $headers = New-SerenaHeaders -Sid $SessionId -Hdr $SessionHdrName
+    $resp    = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
+    $obj     = Parse-SerenaResponse -Raw ([string]$resp.Content)
+    if ($obj.error) { throw "RPC $Method failed: $($obj.error.code) $($obj.error.message)" }
+    return $obj
 }
 
 function Invoke-SerenaTool {
