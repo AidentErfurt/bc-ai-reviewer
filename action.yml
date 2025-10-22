@@ -391,8 +391,8 @@ runs:
           param([string]$Sid,[string]$Hdr)
           $h = @{}
           $h[$Hdr] = $Sid
-          # Keep it JSON-only for POSTs
-          $h['Accept']       = 'application/json'
+          # Server insists on BOTH for Streamable HTTP (even POST)
+          $h['Accept']       = 'application/json, text/event-stream'
           $h['Content-Type'] = 'application/json'
           return $h
         }
