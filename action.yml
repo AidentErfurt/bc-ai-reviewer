@@ -423,13 +423,23 @@ runs:
           return $obj
         }
 
-        function Invoke-SerenaTool([string]$Name,[hashtable]$Args) {
-          Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params @{ name=$Name; arguments=$Args }
+        function Invoke-SerenaTool {
+          param(
+            [string]$Name,
+            $Args = $null
+          )
+
+          $p = @{ name = $Name }
+          if ($Args -is [hashtable] -and $Args.Count -gt 0) {
+            $p.arguments = $Args
+          }
+
+          Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params $p
         }
 
         # --- replace the tools/list probe with a direct tool call ---
         Write-Host "== get_current_config (smoke test) =="
-        $cfg = Invoke-SerenaTool -Name 'get_current_config' -Args @{}
+        $cfg = Invoke-SerenaTool -Name 'get_current_config' -Args $null
         if (-not $cfg.result?.content?[0]?.text) {
           throw "Serena smoke test failed: get_current_config returned no content."
         }
@@ -438,15 +448,15 @@ runs:
 
         # continue with the rest unchanged...
         Write-Host "== find_file (**/*.al) =="
-        $ff = Invoke-SerenaTool -Name 'find_file' -Args @{ pattern = '**/*.al' }
+        $ff  = Invoke-SerenaTool -Name 'find_file' -Args ([hashtable]@{ pattern = '**/*.al' })
         $found = ($ff.result.content[0].text -split "`n") | Where-Object { $_ -match '\.al$' }
         if (-not $found) { throw "Serena find_file found no .al files. Is the project activated correctly?" }
         Write-Host ("Found sample: " + $found[0])
 
-        $firstAl = $found[0].Trim()
+        $firstAl = (($ff.result.content[0].text -split "`n") | Where-Object { $_ -match '\.al$' })[0].Trim()
         Write-Host "== get_symbols_overview ($firstAl) =="
         try {
-          $ov = Invoke-SerenaTool -Name 'get_symbols_overview' -Args @{ relative_path = $firstAl }
+          $ov = Invoke-SerenaTool -Name 'get_symbols_overview' -Args ([hashtable]@{ relative_path = $firstAl })
           ($ov.result.content[0].text | Select-Object -First 80) | Write-Host
         } catch {
           Write-Warning "get_symbols_overview failed (continuing): $($_.Exception.Message)"
