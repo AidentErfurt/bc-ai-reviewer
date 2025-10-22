@@ -425,16 +425,21 @@ runs:
         function Invoke-SerenaTool {
           param(
             [string]$Name,
-            [hashtable]$Args = $null
+            $Args = $null
           )
 
-          if (-not $Args) { $Args = @{} } # <- ensure arguments is present
-
-          $p = @{
-            name      = $Name
-            arguments = $Args
+          # normalize $Args to a hashtable
+          if ($null -eq $Args) {
+            $Args = @{}
+          } elseif ($Args -is [array]) {
+            if ($Args.Count -eq 0) { $Args = @{} }
+            elseif ($Args.Count -eq 1 -and $Args[0] -is [hashtable]) { $Args = $Args[0] }
+            else { throw "Invoke-SerenaTool: Args must be a single hashtable or empty; got array length $($Args.Count)." }
+          } elseif ($Args -isnot [hashtable]) {
+            throw "Invoke-SerenaTool: Args must be a hashtable; got $($Args.GetType().FullName)."
           }
 
+          $p = @{ name = $Name; arguments = $Args }  # <-- always include arguments (even if empty)
           Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params $p
         }
 
