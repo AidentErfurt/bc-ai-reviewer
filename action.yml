@@ -219,19 +219,33 @@ runs:
         $SerenaPid | Out-File /tmp/serena_http.pid -Encoding ascii
         Write-Host "Serena PID: $SerenaPid"
 
-        # ---- Handshake: GET to obtain Mcp-Session-Id header ----
+        # ---- Handshake: obtain Mcp-Session-Id header (HEAD, then GET, then curl as fallback) ----
         $sessionId = $null
         for ($i=1; $i -le 90 -and -not $sessionId; $i++) {
           try {
-            $r = Invoke-WebRequest -Uri $SerenaUrl -Method GET -Headers @{Accept='text/event-stream'} -SkipHttpErrorCheck -TimeoutSec 2
-            $sessionId = $r.Headers['Mcp-Session-Id']
-            if (-not $sessionId) { Start-Sleep -Seconds 1 }
+            # Try HEAD first (no streaming)
+            $h = Invoke-WebRequest -Uri $SerenaUrl -Method HEAD -TimeoutSec 2 -SkipHttpErrorCheck
+            $sessionId = $h.Headers['Mcp-Session-Id']
+            if ($sessionId) { break }
+
+            # Try GET with SSE accept
+            $g = Invoke-WebRequest -Uri $SerenaUrl -Method GET -Headers @{Accept='text/event-stream'} -TimeoutSec 2 -SkipHttpErrorCheck
+            $sessionId = $g.Headers['Mcp-Session-Id']
+            if ($sessionId) { break }
           } catch {
-            Start-Sleep -Seconds 1
+            # final fallback: curl and parse headers (handles streaming better on some runners)
+            try {
+              $raw = & /usr/bin/curl -s -D - -o /dev/null -H 'Accept: text/event-stream' "$SerenaUrl"
+              if ($LASTEXITCODE -eq 0 -and $raw) {
+                $line = ($raw -split "`n") | Where-Object { $_ -match '^\s*Mcp-Session-Id\s*:\s*(\S+)' } | Select-Object -First 1
+                if ($line) { $sessionId = $Matches[1] }
+              }
+            } catch { }
           }
+          if (-not $sessionId) { Start-Sleep -Seconds 1 }
         }
         if (-not $sessionId) {
-          Write-Host "Serena failed to become ready. Tail logs:"
+          Write-Host "Serena failed to expose Mcp-Session-Id. Tail logs:"
           if (Test-Path $err) { Get-Content $err -Tail 200 }
           throw "Serena not ready on $SerenaUrl"
         }
@@ -239,19 +253,21 @@ runs:
         # ---- Initialize JSON-RPC session ----
         $initBody = @{
           jsonrpc = '2.0'
-          id = 'init-1'
-          method = 'initialize'
-          params = @{ protocolVersion = '2024-10-07'; capabilities = @{} }
+          id      = 'init-1'
+          method  = 'initialize'
+          params  = @{ protocolVersion = '2024-10-07'; capabilities = @{} }
         } | ConvertTo-Json -Depth 6
 
-        $initResp = Invoke-RestMethod -Uri $SerenaUrl -Method Post -ContentType 'application/json' -Headers @{ 'Mcp-Session-Id' = $sessionId } -Body $initBody
+        $initResp = Invoke-RestMethod -Uri $SerenaUrl -Method Post -ContentType 'application/json' `
+          -Headers @{ 'Mcp-Session-Id' = $sessionId } -Body $initBody
+
         if (-not $initResp -or -not $initResp.result) {
           throw "Serena initialize failed (no result)."
         }
 
         # Export for later steps
-        "SERENA_URL=$SerenaUrl"         | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
-        "SERENA_SESSION_ID=$sessionId"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+        "SERENA_URL=$SerenaUrl"        | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+        "SERENA_SESSION_ID=$sessionId" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
         Write-Host "SERENA_URL set to $SerenaUrl"
         Write-Host "SERENA_SESSION_ID captured."
 
