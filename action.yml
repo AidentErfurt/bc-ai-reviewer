@@ -238,7 +238,7 @@ runs:
           Write-Host "== Probing Serena at $Url =="
           $sessionId = $null; $headerName = $null
 
-          function Dump-Headers([hashtable]$h){ if($h){ foreach($k in $h.Keys){ Write-Host "  $k: $($h[$k])" } } }
+          function Dump-Headers([hashtable]$h){ if($h){ foreach($k in $h.Keys){ Write-Host "  $($k): $($h[$k])" } } }
 
           try {
             $h = Invoke-WebRequest -Uri $Url -Method HEAD -TimeoutSec 3 -SkipHttpErrorCheck
