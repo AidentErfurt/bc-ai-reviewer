@@ -219,17 +219,29 @@ runs:
         $SerenaPid = $proc.Id
         Write-Host "Serena PID: $SerenaPid"
 
-        # --- Wait for port to open ---
-        $deadline = (Get-Date).AddSeconds(20)
+        # --- Wait for HTTP to answer before header probing ---
+        $deadline = (Get-Date).AddSeconds(25)
+        $ready = $false
         do {
-          $listening = & /usr/sbin/ss -ltnp 2>$null | Select-String -Quiet ":$port "
-          if (-not $listening) { Start-Sleep -Milliseconds 300 }
-        } while (-not $listening -and (Get-Date) -lt $deadline)
+          try {
+            # try a quick GET; any status that isn't "cannot connect" means listener is up
+            $resp = Invoke-WebRequest -Uri "$base/mcp" -Method GET -Headers @{Accept='text/event-stream'} -TimeoutSec 2 -SkipHttpErrorCheck
+            $ready = $true
+          } catch {
+            # connection refused / timeout -> not ready yet
+            if ($proc.HasExited) {
+              Write-Host "-- serena stdout (tail) --"; if (Test-Path $out) { Get-Content $out -Tail 150 }
+              Write-Host "-- serena stderr (tail) --"; if (Test-Path $err) { Get-Content $err -Tail 150 }
+              throw "Serena process exited before HTTP became ready."
+            }
+            Start-Sleep -Milliseconds 300
+          }
+        } while (-not $ready -and (Get-Date) -lt $deadline)
 
-        if (-not $listening) {
+        if (-not $ready) {
           Write-Host "-- serena stdout (tail) --"; if (Test-Path $out) { Get-Content $out -Tail 150 }
           Write-Host "-- serena stderr (tail) --"; if (Test-Path $err) { Get-Content $err -Tail 150 }
-          throw "Serena HTTP server did not open port $port."
+          throw "Serena HTTP endpoint didn’t become reachable at $base/mcp."
         }
 
         # --- Robust header probe (HEAD, GET, curl) ---
