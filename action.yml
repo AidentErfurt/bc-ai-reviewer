@@ -405,33 +405,34 @@ runs:
         }
 
         function Invoke-SerenaRpc {
-          param(
-            [string]$Id,
-            [string]$Method,
-            $Params # can be $null or a hashtable
-          )
+          param([string]$Id,[string]$Method,$Params)
           $payload = @{ jsonrpc='2.0'; id=$Id; method=$Method }
-          if ($Params -ne $null) {
-            # Only include params if provided; some endpoints reject empty objects
-            $payload['params'] = $Params
+          if ($Params -ne $null) { $payload['params'] = $Params }
+          $body = $payload | ConvertTo-Json -Depth 20 -Compress
+          try {
+            $headers = New-SerenaHeaders -Sid $Sid -Hdr $Hdr
+            $resp = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
+            $obj  = Parse-SerenaResponse -Raw ([string]$resp.Content)
+            if ($obj.error) { throw "RPC $Method failed: $($obj.error.code) $($obj.error.message)" }
+            return $obj
+          } catch {
+            Write-Host "Last request body: $body"
+            throw
           }
-          $body    = $payload | ConvertTo-Json -Depth 20
-          $headers = New-SerenaHeaders -Sid $Sid -Hdr $Hdr
-          $resp    = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
-          $obj     = Parse-SerenaResponse -Raw ([string]$resp.Content)
-          if ($obj.error) { throw "RPC $Method failed: $($obj.error.code) $($obj.error.message)" }
-          return $obj
         }
+
 
         function Invoke-SerenaTool {
           param(
             [string]$Name,
-            $Args = $null
+            [hashtable]$Args = $null
           )
 
-          $p = @{ name = $Name }
-          if ($Args -is [hashtable] -and $Args.Count -gt 0) {
-            $p.arguments = $Args
+          if (-not $Args) { $Args = @{} } # <- ensure arguments is present
+
+          $p = @{
+            name      = $Name
+            arguments = $Args
           }
 
           Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params $p
@@ -439,7 +440,7 @@ runs:
 
         # --- replace the tools/list probe with a direct tool call ---
         Write-Host "== get_current_config (smoke test) =="
-        $cfg = Invoke-SerenaTool -Name 'get_current_config' -Args $null
+        $cfg = Invoke-SerenaTool -Name 'get_current_config' -Args (@{})
         if (-not $cfg.result?.content?[0]?.text) {
           throw "Serena smoke test failed: get_current_config returned no content."
         }
