@@ -378,6 +378,7 @@ runs:
       if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
       shell: pwsh
       run: |
+        # Serena connection & health check (minimal + robust)
         $Url = $Env:SERENA_URL
         $Sid = $Env:SERENA_SESSION_ID
         $Hdr = $Env:SERENA_SESSION_HDR
@@ -405,22 +406,20 @@ runs:
         }
 
         function Invoke-SerenaRpc {
-          param([string]$Id,[string]$Method,$Params)
+          param(
+            [string]$Id,
+            [string]$Method,
+            $Params # can be $null
+          )
           $payload = @{ jsonrpc='2.0'; id=$Id; method=$Method }
           if ($Params -ne $null) { $payload['params'] = $Params }
-          $body = $payload | ConvertTo-Json -Depth 20 -Compress
-          try {
-            $headers = New-SerenaHeaders -Sid $Sid -Hdr $Hdr
-            $resp = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
-            $obj  = Parse-SerenaResponse -Raw ([string]$resp.Content)
-            if ($obj.error) { throw "RPC $Method failed: $($obj.error.code) $($obj.error.message)" }
-            return $obj
-          } catch {
-            Write-Host "Last request body: $body"
-            throw
-          }
+          $body    = $payload | ConvertTo-Json -Depth 20
+          $headers = New-SerenaHeaders -Sid $Sid -Hdr $Hdr
+          $resp    = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
+          $obj     = Parse-SerenaResponse -Raw ([string]$resp.Content)
+          if ($obj.error) { throw "RPC $Method failed: $($obj.error.code) $($obj.error.message)" }
+          return $obj
         }
-
 
         function Invoke-SerenaTool {
           param(
@@ -428,10 +427,21 @@ runs:
             $Args = $null
           )
 
-          # normalize $Args to a hashtable
+          # No-arg: omit arguments entirely (some servers reject empty objects)
           if ($null -eq $Args) {
-            $Args = @{}
-          } elseif ($Args -is [array]) {
+            try {
+              return Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params @{ name = $Name }
+            } catch {
+              # If server insists on an object, retry with {}
+              if ($_.Exception.Message -match '-32602') {
+                return Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params @{ name = $Name; arguments = @{} }
+              }
+              throw
+            }
+          }
+
+          # Normalize to hashtable
+          if ($Args -is [array]) {
             if ($Args.Count -eq 0) { $Args = @{} }
             elseif ($Args.Count -eq 1 -and $Args[0] -is [hashtable]) { $Args = $Args[0] }
             else { throw "Invoke-SerenaTool: Args must be a single hashtable or empty; got array length $($Args.Count)." }
@@ -439,31 +449,37 @@ runs:
             throw "Invoke-SerenaTool: Args must be a hashtable; got $($Args.GetType().FullName)."
           }
 
-          $p = @{ name = $Name; arguments = $Args }  # <-- always include arguments (even if empty)
-          Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params $p
+          Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params @{ name = $Name; arguments = $Args }
         }
 
-        # --- replace the tools/list probe with a direct tool call ---
-        Write-Host "== get_current_config (smoke test) =="
-        $cfg = Invoke-SerenaTool -Name 'get_current_config' -Args (@{})
-        if (-not $cfg.result?.content?[0]?.text) {
-          throw "Serena smoke test failed: get_current_config returned no content."
-        }
-        $txt = $cfg.result.content[0].text
-        Write-Host $txt
+        # --- Smoke test: use a no-arg tool that exists in your list ---
+        Write-Host "== smoke test: list_memories =="
+        $smoke = Invoke-SerenaTool -Name 'list_memories' -Args $null
+        Write-Host "Smoke test OK."
 
-        # continue with the rest unchanged...
+        # --- Find a sample .al file using the correct params (file_mask + relative_path) ---
         Write-Host "== find_file (**/*.al) =="
-        $ff  = Invoke-SerenaTool -Name 'find_file' -Args ([hashtable]@{ pattern = '**/*.al' })
-        $found = ($ff.result.content[0].text -split "`n") | Where-Object { $_ -match '\.al$' }
-        if (-not $found) { throw "Serena find_file found no .al files. Is the project activated correctly?" }
-        Write-Host ("Found sample: " + $found[0])
-
-        $firstAl = (($ff.result.content[0].text -split "`n") | Where-Object { $_ -match '\.al$' })[0].Trim()
-        Write-Host "== get_symbols_overview ($firstAl) =="
+        $ff = Invoke-SerenaTool -Name 'find_file' -Args @{ file_mask = '**/*.al'; relative_path = '.' }
+        # $ff.result.content[0].text is usually JSON or newline-joined; be defensive:
+        $ffText = $ff.result?.content?[0]?.text
+        if (-not $ffText) { throw "find_file returned no content." }
+        # Try to parse JSON first; if not JSON, split lines
         try {
-          $ov = Invoke-SerenaTool -Name 'get_symbols_overview' -Args ([hashtable]@{ relative_path = $firstAl })
-          ($ov.result.content[0].text | Select-Object -First 80) | Write-Host
+          $filesObj = $ffText | ConvertFrom-Json
+          $files = $filesObj.files
+        } catch {
+          $files = ($ffText -split "`n") | Where-Object { $_ -match '\.al$' }
+        }
+        if (-not $files -or $files.Count -eq 0) { throw "No .al files found. Is the project activated correctly?" }
+        $firstAl = "$($files[0])".Trim()
+        Write-Host ("Found sample: " + $firstAl)
+
+        # --- Symbols overview on that file ---
+        Write-Host "== get_symbols_overview =="
+        try {
+          $ov = Invoke-SerenaTool -Name 'get_symbols_overview' -Args @{ relative_path = $firstAl }
+          $preview = $ov.result?.content?[0]?.text
+          if ($preview) { ($preview | Select-Object -First 80) | Write-Host }
         } catch {
           Write-Warning "get_symbols_overview failed (continuing): $($_.Exception.Message)"
         }
