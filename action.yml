@@ -378,6 +378,8 @@ runs:
       if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
       shell: pwsh
       run: |
+        serena tools list >/dev/null
+
         # Serena connection & health check (minimal + robust)
         $Url = $Env:SERENA_URL
         $Sid = $Env:SERENA_SESSION_ID
