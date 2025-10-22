@@ -291,8 +291,21 @@ runs:
         Write-Host "Using session id value : $($session.Id)"
 
         # Initialize
-        $initBody = @{ jsonrpc='2.0'; id='init-1'; method='initialize'; params=@{ protocolVersion='2024-10-07'; capabilities=@{} } } | ConvertTo-Json -Depth 6
-        $initResp = Invoke-RestMethod -Uri $SerenaUrl -Method Post -ContentType 'application/json' -Headers @{ $session.Name = $session.Id } -Body $initBody -SkipHttpErrorCheck
+        $initBody = @{ jsonrpc='2.0'; id='init-1'; method='initialize';
+          params=@{ protocolVersion='2024-10-07'; capabilities=@{} } } | ConvertTo-Json -Depth 6
+
+        $headers = @{
+          $session.Name = $session.Id
+          Accept        = 'application/json, text/event-stream'
+        }
+
+        $initResp = Invoke-RestMethod -Uri $SerenaUrl `
+          -Method Post `
+          -ContentType 'application/json' `
+          -Headers $headers `
+          -Body $initBody `
+          -SkipHttpErrorCheck
+
         if (-not $initResp -or -not $initResp.result) {
           Write-Host "Initialize response (raw): $($initResp | ConvertTo-Json -Depth 6 -Compress)"
           Write-Host "-- serena stdout (tail) --"; if (Test-Path $out) { Get-Content $out -Tail 150 }
