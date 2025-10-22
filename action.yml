@@ -182,16 +182,16 @@ runs:
       if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
       shell: pwsh
       run: |
-        # Ensure local bin is on PATH for this and later steps
+        # Ensure local bin on PATH
         "$HOME/.local/bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding ascii
         $env:PATH = "$HOME/.local/bin" + [IO.Path]::PathSeparator + $env:PATH
 
-        # Use the exact Python 3.11 we just installed
+        # Use the Python 3.11
         $pyDir = $env:pythonLocation
         if (-not $pyDir) { throw "pythonLocation env var not set by setup-python." }
         $py = Join-Path $pyDir "bin/python"
 
-        # Install pipx (under the 3.11 toolchain) and Serena
+        # Install pipx + Serena
         & $py -m pip install --user --upgrade pip pipx | Out-String | Write-Host
         & $py -m pipx ensurepath | Out-String | Write-Host
         & $py -m pipx install --python "$py" "git+https://github.com/oraios/serena" | Out-String | Write-Host
@@ -199,47 +199,87 @@ runs:
         $serena = Get-Command serena -ErrorAction Stop
         Write-Host "Serena binary: $($serena.Source)"
 
-        # Start HTTP MCP server (repo root as working dir so discovery sees your code)
+        # Start HTTP MCP server with recommended context
         $port = 5173
         $SerenaUrl = "http://127.0.0.1:$port/mcp"
         $out = "/tmp/serena_http.out"
         $err = "/tmp/serena_http.err"
 
-        $p = Start-Process -FilePath $serena.Source `
-                           -ArgumentList @('start-mcp-server','--transport','streamable-http','--port',"$port") `
-                           -WorkingDirectory $env:GITHUB_WORKSPACE `
-                           -PassThru -NoNewWindow `
-                           -RedirectStandardOutput $out -RedirectStandardError $err
-        $p.Id | Out-File /tmp/serena_http.pid -Encoding ascii
-        Write-Host "Serena PID: $($p.Id)"
+        $proc = Start-Process -FilePath $serena.Source `
+                              -ArgumentList @(
+                                'start-mcp-server',
+                                '--transport','streamable-http',
+                                '--port',"$port",
+                                '--context','ide-assistant'
+                              ) `
+                              -WorkingDirectory $env:GITHUB_WORKSPACE `
+                              -PassThru -NoNewWindow `
+                              -RedirectStandardOutput $out -RedirectStandardError $err
+        $SerenaPid = $proc.Id
+        $SerenaPid | Out-File /tmp/serena_http.pid -Encoding ascii
+        Write-Host "Serena PID: $SerenaPid"
 
-        # Wait until handshake header appears (server ready)
-        $ready = $false
-        for ($i=1; $i -le 90 -and -not $ready; $i++) {
+        # ---- Handshake: GET to obtain Mcp-Session-Id header ----
+        $sessionId = $null
+        for ($i=1; $i -le 90 -and -not $sessionId; $i++) {
           try {
-            $r = Invoke-WebRequest -Uri $SerenaUrl -Method GET -Headers @{Accept='text/event-stream'} -SkipHttpErrorCheck -TimeoutSec 2 -ErrorAction Stop
-            if ($r.Headers['Mcp-Session-Id']) { $ready = $true; break }
+            $r = Invoke-WebRequest -Uri $SerenaUrl -Method GET -Headers @{Accept='text/event-stream'} -SkipHttpErrorCheck -TimeoutSec 2
+            $sessionId = $r.Headers['Mcp-Session-Id']
+            if (-not $sessionId) { Start-Sleep -Seconds 1 }
           } catch {
             Start-Sleep -Seconds 1
           }
         }
-        if (-not $ready) {
+        if (-not $sessionId) {
           Write-Host "Serena failed to become ready. Tail logs:"
           if (Test-Path $err) { Get-Content $err -Tail 200 }
           throw "Serena not ready on $SerenaUrl"
         }
 
-        # Export SERENA_URL for later step
-        "SERENA_URL=$SerenaUrl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
-        Write-Host "SERENA_URL set to $SerenaUrl"
+        # ---- Initialize JSON-RPC session ----
+        $initBody = @{
+          jsonrpc = '2.0'
+          id = 'init-1'
+          method = 'initialize'
+          params = @{ protocolVersion = '2024-10-07'; capabilities = @{} }
+        } | ConvertTo-Json -Depth 6
 
-        # ---- Debug: list discovered app.json files (no activation; session-scoped) ----
+        $initResp = Invoke-RestMethod -Uri $SerenaUrl -Method Post -ContentType 'application/json' -Headers @{ 'Mcp-Session-Id' = $sessionId } -Body $initBody
+        if (-not $initResp -or -not $initResp.result) {
+          throw "Serena initialize failed (no result)."
+        }
+
+        # Export for later steps
+        "SERENA_URL=$SerenaUrl"         | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+        "SERENA_SESSION_ID=$sessionId"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+        Write-Host "SERENA_URL set to $SerenaUrl"
+        Write-Host "SERENA_SESSION_ID captured."
+
+        # ---- Optional: activate every app.json parent as a Serena project ----
         Write-Host "== app.json discovery =="
         $apps = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter 'app.json' -Recurse -File -ErrorAction SilentlyContinue
-        if (-not $apps) {
-          Write-Host "No app.json found under $env:GITHUB_WORKSPACE"
-        } else {
+        if ($apps) {
           $apps | ForEach-Object { Write-Host "• $($_.FullName)" }
+          foreach ($app in $apps) {
+            $projDir = Split-Path $app.FullName -Parent
+            Write-Host "Activating project: $projDir"
+            $callBody = @{
+              jsonrpc = '2.0'
+              id = [guid]::NewGuid().ToString()
+              method = 'tools/call'
+              params = @{
+                name = 'activate_project'
+                arguments = @{ project = $projDir }
+              }
+            } | ConvertTo-Json -Depth 10 -Compress
+            try {
+              Invoke-RestMethod -Uri $SerenaUrl -Method Post -ContentType 'application/json' -Headers @{ 'Mcp-Session-Id' = $sessionId } -Body $callBody | Out-Null
+            } catch {
+              Write-Warning "activate_project failed for $projDir: $($_.Exception.Message)"
+            }
+          }
+        } else {
+          Write-Host "No app.json found under $env:GITHUB_WORKSPACE"
         }
 
     - name: Run AI Code Review
@@ -306,7 +346,7 @@ runs:
       shell: pwsh
       run: |
         if (Test-Path /tmp/serena_http.pid) {
-          $pid = Get-Content /tmp/serena_http.pid
-          Write-Host "Stopping Serena PID $pid"
-          try { Stop-Process -Id $pid -ErrorAction SilentlyContinue } catch {}
+          $SerenaPidFromFile = Get-Content /tmp/serena_http.pid
+          Write-Host "Stopping Serena PID $SerenaPidFromFile"
+          try { Stop-Process -Id $SerenaPidFromFile -ErrorAction SilentlyContinue } catch {}
         }
