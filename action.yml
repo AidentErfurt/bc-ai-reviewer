@@ -290,74 +290,60 @@ runs:
         Write-Host "Using session header name: $($session.Name)"
         Write-Host "Using session id value : $($session.Id)"
 
-        # Initialize (include clientInfo and accept SSE, then parse SSE)
+        # ---- Initialize over SSE ----
         $initBodyObj = @{
           jsonrpc = '2.0'
           id      = 'init-1'
           method  = 'initialize'
           params  = @{
             protocolVersion = '2024-10-07'
-            capabilities    = @{}   # add real capabilities if/when needed
-            clientInfo      = @{
-              name    = 'bc-ai-reviewer'
-              version = '0.1.0'
-            }
+            capabilities    = @{}
+            clientInfo      = @{ name='bc-ai-reviewer'; version='0.1.0' }
           }
         }
         $initBody = $initBodyObj | ConvertTo-Json -Depth 8
 
+        # Put BOTH headers explicitly in -Headers so nothing overwrites Accept
         $headers = @{
           $session.Name = $session.Id
-          # Server expects that the client can accept BOTH JSON and SSE
-          Accept        = 'application/json, text/event-stream'
+          'Accept'      = 'application/json, text/event-stream'
+          'Content-Type'= 'application/json'
         }
 
-        # NOTE: Response is SSE text; not a JSON object
-        $rawInit = Invoke-RestMethod -Uri $SerenaUrl `
-          -Method Post `
-          -ContentType 'application/json' `
-          -Headers $headers `
-          -Body $initBody `
-          -SkipHttpErrorCheck
+        # Use Invoke-WebRequest (returns raw content string), not Invoke-RestMethod
+        $resp = Invoke-WebRequest -Uri $SerenaUrl -Method POST -Headers $headers -Body $initBody -SkipHttpErrorCheck
+        [string]$rawText = $resp.Content
 
-        # $rawInit is SSE like:
-        # event: message
-        # data: {"jsonrpc":"2.0","id":"init-1","result":{...}}
-        # (possibly multiple lines; we grab the last data: JSON)
-        [string]$rawText = $rawInit
+        # Parse SSE: grab the last "data: {...}" line
         $lastJsonLine = ($rawText -split "`n" | Where-Object { $_.TrimStart().StartsWith('data: ') }) | Select-Object -Last 1
         if (-not $lastJsonLine) {
           Write-Host "Initialize response (raw): $rawText"
-          Write-Host "-- serena stdout (tail) --"; if (Test-Path $out) { Get-Content $out -Tail 150 }
-          Write-Host "-- serena stderr (tail) --"; if (Test-Path $err) { Get-Content $err -Tail 150 }
           throw "Serena initialize failed: no SSE data line."
         }
-
         $jsonPart = $lastJsonLine.Substring($lastJsonLine.IndexOf('data: ') + 6).Trim()
-        $initObj  = $null
+        $initObj = $null
         try { $initObj = $jsonPart | ConvertFrom-Json } catch { }
 
         if (-not $initObj) {
           Write-Host "Initialize response (raw): $rawText"
           throw "Serena initialize failed: invalid JSON in SSE payload."
         }
-
         if ($initObj.error) {
           Write-Host "Initialize response (raw): $rawText"
           throw "Serena initialize failed: $($initObj.error.code) $($initObj.error.message)"
         }
-
         if (-not $initObj.result) {
           Write-Host "Initialize response (raw): $rawText"
           throw "Serena initialize failed: no result in initialize response."
         }
 
-        # Success: stash env for later steps
+        # Success -> export env vars
         "SERENA_URL=$SerenaUrl"               | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
         "SERENA_SESSION_ID=$($session.Id)"    | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
         "SERENA_SESSION_HDR=$($session.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
         Write-Host "SERENA_URL set to $SerenaUrl"
         Write-Host "SERENA_SESSION_ID captured."
+
 
 
 
