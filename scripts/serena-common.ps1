@@ -125,3 +125,16 @@ function Probe-SerenaSessionHeader {
 
   return $null
 }
+
+function Send-SerenaNotification {
+  param(
+    [string]$Url, [string]$Sid, [string]$Hdr, [string]$Method, $Params = $null, [int]$TimeoutSec = 60
+  )
+  $headers = New-SerenaHeaders -Sid $Sid -Hdr $Hdr
+  $payload = @{ jsonrpc = '2.0'; method = $Method }
+  if ($Params -ne $null) { $payload.params = $Params }
+  $body = $payload | ConvertTo-Json -Depth 20
+  # Notification: no id, and we ignore any body. Still POST to the same endpoint.
+  Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec -SkipHttpErrorCheck | Out-Null
+}
+

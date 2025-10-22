@@ -33,7 +33,7 @@ $initBodyObj = @{
   id      = 'init-1'
   method  = 'initialize'
   params  = @{
-    protocolVersion = '2024-10-07'
+    protocolVersion = '2025-06-18'
     capabilities    = @{}
     clientInfo      = @{ name='bc-ai-reviewer'; version='0.1.0' }
   }
@@ -42,37 +42,43 @@ $initResp = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
   -Id $initBodyObj.id -Method $initBodyObj.method -Params $initBodyObj.params -TimeoutSec $TimeoutSec
 if (-not $initResp.result) { throw "initialize returned no result." }
 
-function Get-SerenaTools-ViaList {
-  param(
-    [string]$Url, [string]$Sid, [string]$Hdr, [int]$TimeoutSec = 60
-  )
-  $ids  = @([guid]::NewGuid().ToString(), [guid]::NewGuid().ToString(), [guid]::NewGuid().ToString(), [guid]::NewGuid().ToString())
-  $tryPayloads = @(
-    @{ id=$ids[0]; method='tools/list'; params=$null       },
-    @{ id=$ids[1]; method='tools/list'; params=@{}         },
-    @{ id=$ids[2]; method='tools/list'; params=@{cursor=$null} },
-    @{ id=$ids[3]; method='tools/list'; params=@{cursor=''} }
-  )
+# Tell server we're ready
+Send-SerenaNotification -Url $Url -Sid $Sid -Hdr $Hdr -Method 'notifications/initialized' -Params @{} -TimeoutSec $TimeoutSec
 
-  foreach ($p in $tryPayloads) {
-    try {
-      $resp = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
-               -Id $p.id -Method $p.method -Params $p.params -TimeoutSec $TimeoutSec
-      if ($resp.result -and $resp.result.tools) {
-        return ,@($resp.result.tools | ForEach-Object { $_.name })
-      }
-    } catch {
-      if ($_.Exception.Message -notmatch 'tools/list') { throw } # unexpected error: bubble up
-      Write-Host "tools/list variant failed: $($_.Exception.Message)"
-      continue
-    }
-  }
+$tl = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
+  -Id ([guid]::NewGuid()).Guid -Method 'tools/list' -Params $null -TimeoutSec $TimeoutSec
 
-  return @()  # all variants failed
-}
+# function Get-SerenaTools-ViaList {
+#   param(
+#     [string]$Url, [string]$Sid, [string]$Hdr, [int]$TimeoutSec = 60
+#   )
+#   $ids  = @([guid]::NewGuid().ToString(), [guid]::NewGuid().ToString(), [guid]::NewGuid().ToString(), [guid]::NewGuid().ToString())
+#   $tryPayloads = @(
+#     @{ id=$ids[0]; method='tools/list'; params=$null       },
+#     @{ id=$ids[1]; method='tools/list'; params=@{}         },
+#     @{ id=$ids[2]; method='tools/list'; params=@{cursor=$null} },
+#     @{ id=$ids[3]; method='tools/list'; params=@{cursor=''} }
+#   )
 
-# --- Try tools/list with multiple encodings ---
-$toolNames = Get-SerenaTools-ViaList -Url $Url -Sid $Sid -Hdr $Hdr -TimeoutSec $TimeoutSec
+#   foreach ($p in $tryPayloads) {
+#     try {
+#       $resp = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
+#                -Id $p.id -Method $p.method -Params $p.params -TimeoutSec $TimeoutSec
+#       if ($resp.result -and $resp.result.tools) {
+#         return ,@($resp.result.tools | ForEach-Object { $_.name })
+#       }
+#     } catch {
+#       if ($_.Exception.Message -notmatch 'tools/list') { throw } # unexpected error: bubble up
+#       Write-Host "tools/list variant failed: $($_.Exception.Message)"
+#       continue
+#     }
+#   }
+
+#   return @()  # all variants failed
+# }
+
+# # --- Try tools/list with multiple encodings ---
+# $toolNames = Get-SerenaTools-ViaList -Url $Url -Sid $Sid -Hdr $Hdr -TimeoutSec $TimeoutSec
 
 # # tools/list - omit params entirely for first page
 # # First page: ABSOLUTELY NO params property
