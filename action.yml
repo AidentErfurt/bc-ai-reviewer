@@ -380,13 +380,46 @@ runs:
       run: |
         $Url = $Env:SERENA_URL
         $Sid = $Env:SERENA_SESSION_ID
-        if (-not $Url -or -not $Sid) { throw "SERENA_URL / SERENA_SESSION_ID not set." }
+        $Hdr = $Env:SERENA_SESSION_HDR
+        if (-not $Url -or -not $Sid -or -not $Hdr) { throw "SERENA_URL / SERENA_SESSION_ID / SERENA_SESSION_HDR not set." }
 
-        function Invoke-SerenaRpc([string]$Id,[string]$Method,[hashtable]$Params) {
-          $body = @{ jsonrpc='2.0'; id=$Id; method=$Method; params=$Params } | ConvertTo-Json -Depth 20
-          Invoke-RestMethod -Uri $Url -Method Post -ContentType 'application/json' -Headers @{ 'Mcp-Session-Id' = $Sid } -Body $body
+        # use the same timeout we expose as an input (fallback 60)
+        $TimeoutSec = [int](${Env:SERENA_TIMEOUT_SEC} ?? 60)
+
+        function New-SerenaHeaders {
+          param([string]$Sid,[string]$Hdr)
+          $h = @{}
+          $h[$Hdr] = $Sid
+          $h['Accept']       = 'application/json, text/event-stream'
+          $h['Content-Type'] = 'application/json'
+          return $h
         }
-        function Invoke-SerenaTool([string]$Name,[hashtable]$Args) {
+
+        function Parse-SerenaResponse {
+          param([string]$Raw)
+          $trim = $Raw.Trim()
+          if ($trim.StartsWith('{')) {
+            return ($trim | ConvertFrom-Json)
+          }
+          # SSE: pick the last data: line
+          $last = ($Raw -split "`n" | Where-Object { $_.TrimStart().StartsWith('data: ') }) | Select-Object -Last 1
+          if (-not $last) { throw "No SSE data line in response." }
+          $json = $last.Substring($last.IndexOf('data: ') + 6).Trim()
+          return ($json | ConvertFrom-Json)
+        }
+
+        function Invoke-SerenaRpc {
+          param([string]$Id,[string]$Method,[hashtable]$Params)
+          $body    = @{ jsonrpc='2.0'; id=$Id; method=$Method; params=$Params } | ConvertTo-Json -Depth 20
+          $headers = New-SerenaHeaders -Sid $Sid -Hdr $Hdr
+          $resp    = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
+          $obj     = Parse-SerenaResponse -Raw ([string]$resp.Content)
+          if ($obj.error) { throw "RPC $Method failed: $($obj.error.code) $($obj.error.message)" }
+          return $obj
+        }
+
+        function Invoke-SerenaTool {
+          param([string]$Name,[hashtable]$Args)
           Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params @{ name=$Name; arguments=$Args }
         }
 
@@ -399,7 +432,7 @@ runs:
         $txt = $cfg.result.content[0].text
         Write-Host $txt
 
-        # If we didn't manually activate earlier, do it now (every app.json parent).
+        # Activate detected apps (optional but helpful)
         $apps = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter 'app.json' -Recurse -File -ErrorAction SilentlyContinue
         if ($apps) {
           foreach ($app in $apps) {
@@ -409,14 +442,12 @@ runs:
           }
         }
 
-        # Sanity: can we see any .al files?
         Write-Host "== find_file (**/*.al) =="
         $ff = Invoke-SerenaTool -Name 'find_file' -Args @{ pattern = '**/*.al' }
         $found = ($ff.result.content[0].text -split "`n") | Where-Object { $_ -match '\.al$' }
         if (-not $found) { throw "Serena find_file found no .al files. Is the project activated correctly?" }
         Write-Host ("Found sample: " + $found[0])
 
-        # Optional: try a symbols overview on the first .al file
         $firstAl = $found[0].Trim()
         Write-Host "== get_symbols_overview ($firstAl) =="
         try {
