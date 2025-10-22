@@ -383,7 +383,6 @@ runs:
         $Hdr = $Env:SERENA_SESSION_HDR
         if (-not $Url -or -not $Sid -or -not $Hdr) { throw "SERENA_URL / SERENA_SESSION_ID / SERENA_SESSION_HDR not set." }
 
-        # use the same timeout we expose as an input (fallback 60)
         $TimeoutSec = [int](${Env:SERENA_TIMEOUT_SEC} ?? 60)
 
         function New-SerenaHeaders {
@@ -398,10 +397,7 @@ runs:
         function Parse-SerenaResponse {
           param([string]$Raw)
           $trim = $Raw.Trim()
-          if ($trim.StartsWith('{')) {
-            return ($trim | ConvertFrom-Json)
-          }
-          # SSE: pick the last data: line
+          if ($trim.StartsWith('{')) { return ($trim | ConvertFrom-Json) }
           $last = ($Raw -split "`n" | Where-Object { $_.TrimStart().StartsWith('data: ') }) | Select-Object -Last 1
           if (-not $last) { throw "No SSE data line in response." }
           $json = $last.Substring($last.IndexOf('data: ') + 6).Trim()
@@ -409,8 +405,17 @@ runs:
         }
 
         function Invoke-SerenaRpc {
-          param([string]$Id,[string]$Method,[hashtable]$Params)
-          $body    = @{ jsonrpc='2.0'; id=$Id; method=$Method; params=$Params } | ConvertTo-Json -Depth 20
+          param(
+            [string]$Id,
+            [string]$Method,
+            $Params # can be $null or a hashtable
+          )
+          $payload = @{ jsonrpc='2.0'; id=$Id; method=$Method }
+          if ($Params -ne $null) {
+            # Only include params if provided; some endpoints reject empty objects
+            $payload['params'] = $Params
+          }
+          $body    = $payload | ConvertTo-Json -Depth 20
           $headers = New-SerenaHeaders -Sid $Sid -Hdr $Hdr
           $resp    = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
           $obj     = Parse-SerenaResponse -Raw ([string]$resp.Content)
@@ -424,23 +429,17 @@ runs:
         }
 
         Write-Host "== tools/list =="
-        $tools = Invoke-SerenaRpc -Id 'list-1' -Method 'tools/list' -Params @{}
+        # IMPORTANT: pass $null, not @{}
+        $tools = Invoke-SerenaRpc -Id 'list-1' -Method 'tools/list' -Params $null
+        # Fallback for stricter servers (uncomment if needed):
+        # $tools = Invoke-SerenaRpc -Id 'list-1' -Method 'tools/list' -Params @{ cursor = $null }
+
         if (-not $tools.result.tools) { throw "Serena tools not listed." }
 
         Write-Host "== get_current_config =="
         $cfg = Invoke-SerenaTool -Name 'get_current_config' -Args @{}
         $txt = $cfg.result.content[0].text
         Write-Host $txt
-
-        # Activate detected apps (optional but helpful)
-        $apps = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter 'app.json' -Recurse -File -ErrorAction SilentlyContinue
-        if ($apps) {
-          foreach ($app in $apps) {
-            $proj = Split-Path $app.FullName -Parent
-            Write-Host "Activating project: $proj"
-            try { Invoke-SerenaTool -Name 'activate_project' -Args @{ project = $proj } | Out-Null } catch { Write-Warning $_ }
-          }
-        }
 
         Write-Host "== find_file (**/*.al) =="
         $ff = Invoke-SerenaTool -Name 'find_file' -Args @{ pattern = '**/*.al' }
@@ -458,6 +457,7 @@ runs:
         }
 
         Write-Host "Serena health check OK."
+
 
     - name: Run AI Code Review
       shell: pwsh
