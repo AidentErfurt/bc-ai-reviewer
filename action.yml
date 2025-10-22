@@ -378,9 +378,8 @@ runs:
       if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
       shell: pwsh
       run: |
-        serena tools list >/dev/null
+        # Serena connection & health check (strict arguments object)
 
-        # Serena connection & health check (minimal + robust)
         $Url = $Env:SERENA_URL
         $Sid = $Env:SERENA_SESSION_ID
         $Hdr = $Env:SERENA_SESSION_HDR
@@ -392,7 +391,8 @@ runs:
           param([string]$Sid,[string]$Hdr)
           $h = @{}
           $h[$Hdr] = $Sid
-          $h['Accept']       = 'application/json, text/event-stream'
+          # Keep it JSON-only for POSTs
+          $h['Accept']       = 'application/json'
           $h['Content-Type'] = 'application/json'
           return $h
         }
@@ -411,7 +411,7 @@ runs:
           param(
             [string]$Id,
             [string]$Method,
-            $Params # can be $null
+            $Params
           )
           $payload = @{ jsonrpc='2.0'; id=$Id; method=$Method }
           if ($Params -ne $null) { $payload['params'] = $Params }
@@ -428,22 +428,9 @@ runs:
             [string]$Name,
             $Args = $null
           )
-
-          # No-arg: omit arguments entirely (some servers reject empty objects)
-          if ($null -eq $Args) {
-            try {
-              return Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params @{ name = $Name }
-            } catch {
-              # If server insists on an object, retry with {}
-              if ($_.Exception.Message -match '-32602') {
-                return Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params @{ name = $Name; arguments = @{} }
-              }
-              throw
-            }
-          }
-
-          # Normalize to hashtable
-          if ($Args -is [array]) {
+          # Always send an object for arguments. If none provided, use @{}
+          if ($null -eq $Args) { $Args = @{} }
+          elseif ($Args -is [array]) {
             if ($Args.Count -eq 0) { $Args = @{} }
             elseif ($Args.Count -eq 1 -and $Args[0] -is [hashtable]) { $Args = $Args[0] }
             else { throw "Invoke-SerenaTool: Args must be a single hashtable or empty; got array length $($Args.Count)." }
@@ -451,21 +438,33 @@ runs:
             throw "Invoke-SerenaTool: Args must be a hashtable; got $($Args.GetType().FullName)."
           }
 
-          Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params @{ name = $Name; arguments = $Args }
+          $params = @{ name = $Name; arguments = $Args }
+          Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params $params
         }
 
-        # --- Smoke test: use a no-arg tool that exists in your list ---
-        Write-Host "== smoke test: list_memories =="
-        $smoke = Invoke-SerenaTool -Name 'list_memories' -Args $null
-        Write-Host "Smoke test OK."
+        # -- Smoke test 1: use a tool with explicit arguments (removes the no-arg ambiguity)
+        Write-Host "== smoke test: execute_shell_command (echo) =="
+        $exec = Invoke-SerenaTool -Name 'execute_shell_command' -Args @{ command = 'echo serena-ok'; capture_stderr = $true }
+        $execTxt = $exec.result?.content?[0]?.text
+        if (-not $execTxt -or $execTxt -notmatch 'serena-ok') {
+          throw "Shell smoke test did not echo expected text. Raw: $execTxt"
+        }
+        Write-Host "Shell smoke test OK."
 
-        # --- Find a sample .al file using the correct params (file_mask + relative_path) ---
+        # -- Smoke test 2: a nominal no-param tool BUT with {} arguments (as required)
+        Write-Host "== get_current_config =="
+        $cfg = Invoke-SerenaTool -Name 'get_current_config' -Args @{}
+        $cfgTxt = $cfg.result?.content?[0]?.text
+        if (-not $cfgTxt) { throw "get_current_config returned no content." }
+        Write-Host "get_current_config OK."
+
+        # -- Find a sample .al file (correct param names from your tool list)
         Write-Host "== find_file (**/*.al) =="
         $ff = Invoke-SerenaTool -Name 'find_file' -Args @{ file_mask = '**/*.al'; relative_path = '.' }
-        # $ff.result.content[0].text is usually JSON or newline-joined; be defensive:
         $ffText = $ff.result?.content?[0]?.text
         if (-not $ffText) { throw "find_file returned no content." }
-        # Try to parse JSON first; if not JSON, split lines
+
+        # Try JSON first; else line list
         try {
           $filesObj = $ffText | ConvertFrom-Json
           $files = $filesObj.files
@@ -476,7 +475,7 @@ runs:
         $firstAl = "$($files[0])".Trim()
         Write-Host ("Found sample: " + $firstAl)
 
-        # --- Symbols overview on that file ---
+        # -- Symbols overview on that file
         Write-Host "== get_symbols_overview =="
         try {
           $ov = Invoke-SerenaTool -Name 'get_symbols_overview' -Args @{ relative_path = $firstAl }
@@ -487,6 +486,7 @@ runs:
         }
 
         Write-Host "Serena health check OK."
+
 
     - name: Run AI Code Review
       shell: pwsh
