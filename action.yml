@@ -171,58 +171,69 @@ runs:
       working-directory: ${{ github.action_path }}
       run: npm install --no-save parse-diff@latest
 
-    # --- Serena HTTP: install + start + wait + debug(app.json) ---
+    # Serena needs Python 3.11 (rejects 3.12)
+    - name: Setup Python 3.11 for Serena
+      if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
     - name: Install & Start Serena (HTTP)
       if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
       shell: pwsh
       run: |
-        # Ensure local bin on PATH for current + later steps
+        # Ensure local bin is on PATH for this and later steps
         "$HOME/.local/bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding ascii
         $env:PATH = "$HOME/.local/bin" + [IO.Path]::PathSeparator + $env:PATH
 
-        # Install pipx if needed
-        if (-not (Get-Command pipx -ErrorAction SilentlyContinue)) {
-          python3 -m pip install --user pipx
-        }
+        # Use the exact Python 3.11 we just installed
+        $pyDir = $env:pythonLocation
+        if (-not $pyDir) { throw "pythonLocation env var not set by setup-python." }
+        $py = Join-Path $pyDir "bin/python"
 
-        # Install Serena CLI if missing
-        if (-not (Get-Command serena -ErrorAction SilentlyContinue)) {
-          python3 -m pipx install "git+https://github.com/oraios/serena"
-        }
+        # Install pipx (under the 3.11 toolchain) and Serena
+        & $py -m pip install --user --upgrade pip pipx | Out-String | Write-Host
+        & $py -m pipx ensurepath | Out-String | Write-Host
+        & $py -m pipx install --python "$py" "git+https://github.com/oraios/serena" | Out-String | Write-Host
 
-        # Start Serena HTTP server
+        $serena = Get-Command serena -ErrorAction Stop
+        Write-Host "Serena binary: $($serena.Source)"
+
+        # Start HTTP MCP server (repo root as working dir so discovery sees your code)
         $port = 5173
         $SerenaUrl = "http://127.0.0.1:$port/mcp"
-        $serenaPath = (Get-Command serena -ErrorAction Stop).Source
-
         $out = "/tmp/serena_http.out"
         $err = "/tmp/serena_http.err"
-        $proc = Start-Process -FilePath $serenaPath `
-                              -ArgumentList @('start-mcp-server','--transport','streamable-http','--port',"$port") `
-                              -PassThru -NoNewWindow `
-                              -RedirectStandardOutput $out -RedirectStandardError $err
-        $proc.Id | Out-File /tmp/serena_http.pid -Encoding ascii
-        Write-Host "Serena PID: $($proc.Id)"
 
-        # Wait until the HTTP endpoint exposes the MCP-SID header
+        $p = Start-Process -FilePath $serena.Source `
+                           -ArgumentList @('start-mcp-server','--transport','streamable-http','--port',"$port") `
+                           -WorkingDirectory $env:GITHUB_WORKSPACE `
+                           -PassThru -NoNewWindow `
+                           -RedirectStandardOutput $out -RedirectStandardError $err
+        $p.Id | Out-File /tmp/serena_http.pid -Encoding ascii
+        Write-Host "Serena PID: $($p.Id)"
+
+        # Wait until handshake header appears (server ready)
         $ready = $false
-        for ($i=1; $i -le 60 -and -not $ready; $i++) {
+        for ($i=1; $i -le 90 -and -not $ready; $i++) {
           try {
             $r = Invoke-WebRequest -Uri $SerenaUrl -Method GET -Headers @{Accept='text/event-stream'} -SkipHttpErrorCheck -TimeoutSec 2 -ErrorAction Stop
             if ($r.Headers['Mcp-Session-Id']) { $ready = $true; break }
-          } catch { Start-Sleep -Seconds 1 }
+          } catch {
+            Start-Sleep -Seconds 1
+          }
         }
         if (-not $ready) {
-          Write-Host "Serena HTTP did not become ready. Tail logs:"
-          if (Test-Path $err) { Get-Content $err -Tail 100 }
+          Write-Host "Serena failed to become ready. Tail logs:"
+          if (Test-Path $err) { Get-Content $err -Tail 200 }
           throw "Serena not ready on $SerenaUrl"
         }
 
-        # Expose SERENA_URL for later steps
+        # Export SERENA_URL for later step
         "SERENA_URL=$SerenaUrl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
         Write-Host "SERENA_URL set to $SerenaUrl"
 
-        # --- Debug: list discovered app.json (no activation here; activation would be session-scoped) ---
+        # ---- Debug: list discovered app.json files (no activation; session-scoped) ----
         Write-Host "== app.json discovery =="
         $apps = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter 'app.json' -Recurse -File -ErrorAction SilentlyContinue
         if (-not $apps) {
