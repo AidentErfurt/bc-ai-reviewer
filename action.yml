@@ -438,7 +438,7 @@ runs:
           if ($Args -is [hashtable] -and $Args.Count -gt 0) { $p.arguments = $Args }  # OMIT when no params!
 
           # For debugging if needed:
-          # Write-Host ("Last request body: " + (($p | ConvertTo-Json -Depth 20) -replace '\s+', ' '))
+          Write-Host ("Last request body: " + (($p | ConvertTo-Json -Depth 20) -replace '\s+', ' '))
 
           Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params $p
         }
@@ -475,7 +475,7 @@ runs:
         if (-not $cfgTxt) { throw "current_config returned no content." }
         Write-Host "current_config OK."
 
-        # --- Optional: find_file if you want a quick content probe (args required) ---
+        # --- Optional: find_file (args required) ---
         Write-Host "== probe: find_file (**/*.al) =="
         $ff = Invoke-SerenaTool -Name 'find_file' -Args @{ file_mask = '**/*.al'; relative_path = '.' }
         $ffText = $ff.result?.content?[0]?.text
