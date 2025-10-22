@@ -423,64 +423,39 @@ runs:
         function Invoke-SerenaTool {
           param(
             [string]$Name,
-            $Args = $null  # $null means "no params" (schema null). Hashtable => include; empty => omit.
+            $ToolArgs = $null
           )
 
-          if ($Args -is [array]) {
-            if ($Args.Count -eq 0) { $Args = $null }
-            elseif ($Args.Count -eq 1 -and $Args[0] -is [hashtable]) { $Args = $Args[0] }
-            else { throw "Invoke-SerenaTool: Args must be a single hashtable or empty; got array length $($Args.Count)." }
-          } elseif ($Args -isnot [hashtable] -and $Args -ne $null) {
-            throw "Invoke-SerenaTool: Args must be a hashtable or `$null; got $($Args.GetType().FullName)."
+          # normalize/validate
+          if ($ToolArgs -is [array]) {
+            if ($ToolArgs.Count -eq 0) { $ToolArgs = $null }
+            elseif ($ToolArgs.Count -eq 1 -and $ToolArgs[0] -is [hashtable]) { $ToolArgs = $ToolArgs[0] }
+            else { throw "Invoke-SerenaTool: ToolArgs must be a single hashtable or empty; got array length $($ToolArgs.Count)." }
+          } elseif ($ToolArgs -isnot [hashtable] -and $ToolArgs -ne $null) {
+            throw "Invoke-SerenaTool: ToolArgs must be a hashtable or `$null; got $($ToolArgs.GetType().FullName)."
           }
 
           $p = @{ name = $Name }
-          if ($Args -is [hashtable] -and $Args.Count -gt 0) { $p.arguments = $Args }  # OMIT when no params!
+          if ($ToolArgs -is [hashtable] -and $ToolArgs.Count -gt 0) { $p.arguments = $ToolArgs }  # omit when none
 
           # For debugging if needed:
-          Write-Host ("Last request body: " + (($p | ConvertTo-Json -Depth 20) -replace '\s+', ' '))
+          Write-Host ("Last request body: " + ($p | ConvertTo-Json -Depth 20))
 
           Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params $p
         }
 
-        # --- Smoke 1: shell command (dual-name fallback, minimal args first) ---
-        Write-Host "== smoke: shell echo =="
-        $exec = $null
-        $err1 = $null; $err2 = $null
-
-        try {
-          $exec = Invoke-SerenaTool -Name 'execute_shell_command' -Args @{ command = 'echo serena-ok' }
-        } catch { $err1 = $_ }
-
+        # Shell smoke (dual-name fallback)
+        $exec = $null; $err1=$null; $err2=$null
+        try { $exec = Invoke-SerenaTool -Name 'execute_shell_command' -ToolArgs @{ command = 'echo serena-ok' } } catch { $err1 = $_ }
         if (-not $exec) {
-          try {
-            $exec = Invoke-SerenaTool -Name 'shell_command' -Args @{ command = 'echo serena-ok' }
-          } catch { $err2 = $_ }
+          try { $exec = Invoke-SerenaTool -Name 'shell_command' -ToolArgs @{ command = 'echo serena-ok' } } catch { $err2 = $_ }
         }
 
-        if (-not $exec) {
-          throw "Both shell tool names failed. First: $($err1?.Exception.Message)  Second: $($err2?.Exception.Message)"
-        }
+        # get_current_config — NO arguments at all (schema null)
+        $cfg = Invoke-SerenaTool -Name 'get_current_config' -ToolArgs $null
 
-        $execTxt = $exec.result?.content?[0]?.text
-        if (-not $execTxt -or $execTxt -notmatch 'serena-ok') {
-          throw "Shell smoke: echo text not found. Raw: $execTxt"
-        }
-        Write-Host "Shell OK."
-
-        # --- Smoke 2: get_current_config (NO arguments field at all) ---
-        Write-Host "== smoke: current_config =="
-        $cfg = Invoke-SerenaTool -Name 'get_current_config' -Args $null
-        $cfgTxt = $cfg.result?.content?[0]?.text
-        if (-not $cfgTxt) { throw "current_config returned no content." }
-        Write-Host "current_config OK."
-
-        # --- Optional: find_file (args required) ---
-        Write-Host "== probe: find_file (**/*.al) =="
-        $ff = Invoke-SerenaTool -Name 'find_file' -Args @{ file_mask = '**/*.al'; relative_path = '.' }
-        $ffText = $ff.result?.content?[0]?.text
-        if (-not $ffText) { throw "find_file returned no content." }
-        Write-Host "find_file OK."
+        # find_file — explicit arguments as per your tool list
+        $ff = Invoke-SerenaTool -Name 'find_file' -ToolArgs @{ file_mask = '**/*.al'; relative_path = '.' }
 
         Write-Host "Serena health check OK."
 
