@@ -128,13 +128,25 @@ function Probe-SerenaSessionHeader {
 
 function Send-SerenaNotification {
   param(
-    [string]$Url, [string]$Sid, [string]$Hdr, [string]$Method, $Params = $null, [int]$TimeoutSec = 60
+    [Parameter(Mandatory)] [string]$Url,
+    [Parameter(Mandatory)] [string]$SessionId,
+    [Parameter(Mandatory)] [string]$SessionHdrName,
+    [Parameter(Mandatory)] [string]$Method,
+    $Params = $null,
+    [int]$TimeoutSec = 60
   )
-  $headers = New-SerenaHeaders -Sid $Sid -Hdr $Hdr
+  $headers = New-SerenaHeaders -Sid $SessionId -Hdr $SessionHdrName
   $payload = @{ jsonrpc = '2.0'; method = $Method }
-  if ($Params -ne $null) { $payload.params = $Params }
-  $body = $payload | ConvertTo-Json -Depth 20
-  # Notification: no id, and we ignore any body. Still POST to the same endpoint.
+  if ($Params -ne $null) { $payload['params'] = $Params }
+  $body = $payload | ConvertTo-Json -Depth 20 -Compress
   Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec -SkipHttpErrorCheck | Out-Null
 }
+
+function Write-SerenaDebug {
+  param([string]$Message)
+  if ($env:SERENA_DEBUG -and $env:SERENA_DEBUG -in @('1','true','True')) {
+    Write-Host "[serena][debug] $Message"
+  }
+}
+
 
