@@ -32,23 +32,43 @@ function Invoke-SerenaRpc {
   )
 
   # Build payload WITHOUT params by default
-  $payload = @{ jsonrpc='2.0'; id=$Id; method=$Method }
+  $payload = [ordered]@{
+    jsonrpc = '2.0'
+    id      = $Id
+    method  = $Method
+  }
 
-  # Only include params when non-null AND (not an empty hashtable)
-  $includeParams =
-    ($Params -ne $null) -and -not ($Params -is [hashtable] -and $Params.Count -eq 0)
-
+  # Only include params when non-null AND not an empty hashtable
+  $includeParams = ($Params -ne $null) -and -not ($Params -is [hashtable] -and $Params.Count -eq 0)
   if ($includeParams) { $payload['params'] = $Params }
 
-  $body    = $payload | ConvertTo-Json -Depth 20
+  $body = ($payload | ConvertTo-Json -Depth 30)
+
+  # DEBUG: print the body we're *actually* sending
+  Write-Host ">>> Serena RPC request ($Method): $body"
+
   $headers = New-SerenaHeaders -Sid $SessionId -Hdr $SessionHdrName
-  $resp    = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body `
+  try {
+    $resp = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body `
               -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
-  $obj     = Parse-SerenaResponse -Raw ([string]$resp.Content)
-  if ($obj.error) { throw "RPC $Method failed: $($obj.error.code) $($obj.error.message)" }
+  } catch {
+    Write-Host "HTTP exception for $($Method): $($_.Exception.Message)"
+    throw
+  }
+
+  $raw = [string]$resp.Content
+  # DEBUG: raw response (trim big streams if needed)
+  Write-Host "<<< Serena RPC raw response ($Method): $($raw.Substring(0,[Math]::Min($raw.Length, 2000)))"
+
+  $obj = Parse-SerenaResponse -Raw $raw
+  if ($obj.error) {
+    # Show full error object if present
+    $errJson = ($obj.error | ConvertTo-Json -Depth 30)
+    Write-Host "!!! Serena RPC error ($Method): $errJson"
+    throw "RPC $Method failed: $($obj.error.code) $($obj.error.message)"
+  }
   return $obj
 }
-
 
 function Invoke-SerenaTool {
   param(

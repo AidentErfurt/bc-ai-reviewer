@@ -42,9 +42,18 @@ $initResp = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
   -Id $initBodyObj.id -Method $initBodyObj.method -Params $initBodyObj.params -TimeoutSec $TimeoutSec
 if (-not $initResp.result) { throw "initialize returned no result." }
 
-# tools/list — omit params entirely for first page
+# tools/list - omit params entirely for first page
+# First page: ABSOLUTELY NO params property
 $tl = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
   -Id ([guid]::NewGuid().ToString()) -Method 'tools/list' -Params $null -TimeoutSec $TimeoutSec
+
+# Optional paging:
+if ($tl.result -and $tl.result.nextCursor) {
+  $cursor = [string]$tl.result.nextCursor  # ensure it’s string
+  $tl2 = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
+    -Id ([guid]::NewGuid().ToString()) -Method 'tools/list' -Params @{ cursor = $cursor } -TimeoutSec $TimeoutSec
+  # merge pages if you want…
+}
 
 $toolNames = @()
 if ($tl.result -and $tl.result.tools) {
