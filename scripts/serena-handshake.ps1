@@ -42,18 +42,50 @@ $initResp = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
   -Id $initBodyObj.id -Method $initBodyObj.method -Params $initBodyObj.params -TimeoutSec $TimeoutSec
 if (-not $initResp.result) { throw "initialize returned no result." }
 
-# tools/list - omit params entirely for first page
-# First page: ABSOLUTELY NO params property
-$tl = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
-  -Id ([guid]::NewGuid().ToString()) -Method 'tools/list' -Params $null -TimeoutSec $TimeoutSec
+function Get-SerenaTools-ViaList {
+  param(
+    [string]$Url, [string]$Sid, [string]$Hdr, [int]$TimeoutSec = 60
+  )
+  $ids  = @([guid]::NewGuid().ToString(), [guid]::NewGuid().ToString(), [guid]::NewGuid().ToString(), [guid]::NewGuid().ToString())
+  $tryPayloads = @(
+    @{ id=$ids[0]; method='tools/list'; params=$null       },
+    @{ id=$ids[1]; method='tools/list'; params=@{}         },
+    @{ id=$ids[2]; method='tools/list'; params=@{cursor=$null} },
+    @{ id=$ids[3]; method='tools/list'; params=@{cursor=''} }
+  )
 
-# Optional paging:
-if ($tl.result -and $tl.result.nextCursor) {
-  $cursor = [string]$tl.result.nextCursor  # ensure it’s string
-  $tl2 = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
-    -Id ([guid]::NewGuid().ToString()) -Method 'tools/list' -Params @{ cursor = $cursor } -TimeoutSec $TimeoutSec
-  # merge pages if you want…
+  foreach ($p in $tryPayloads) {
+    try {
+      $resp = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
+               -Id $p.id -Method $p.method -Params $p.params -TimeoutSec $TimeoutSec
+      if ($resp.result -and $resp.result.tools) {
+        return ,@($resp.result.tools | ForEach-Object { $_.name })
+      }
+    } catch {
+      if ($_.Exception.Message -notmatch 'tools/list') { throw } # unexpected error: bubble up
+      Write-Host "tools/list variant failed: $($_.Exception.Message)"
+      continue
+    }
+  }
+
+  return @()  # all variants failed
 }
+
+# --- Try tools/list with multiple encodings ---
+$toolNames = Get-SerenaTools-ViaList -Url $Url -Sid $Sid -Hdr $Hdr -TimeoutSec $TimeoutSec
+
+# # tools/list - omit params entirely for first page
+# # First page: ABSOLUTELY NO params property
+# $tl = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
+#   -Id ([guid]::NewGuid().ToString()) -Method 'tools/list' -Params $null -TimeoutSec $TimeoutSec
+
+# # Optional paging:
+# if ($tl.result -and $tl.result.nextCursor) {
+#   $cursor = [string]$tl.result.nextCursor  # ensure it’s string
+#   $tl2 = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
+#     -Id ([guid]::NewGuid().ToString()) -Method 'tools/list' -Params @{ cursor = $cursor } -TimeoutSec $TimeoutSec
+#   # merge pages if you want…
+# }
 
 $toolNames = @()
 if ($tl.result -and $tl.result.tools) {
