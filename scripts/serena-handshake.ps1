@@ -42,9 +42,9 @@ $initResp = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
   -Id $initBodyObj.id -Method $initBodyObj.method -Params $initBodyObj.params -TimeoutSec $TimeoutSec
 if (-not $initResp.result) { throw "initialize returned no result." }
 
-# tools/list (must pass an object, not null)
+# tools/list — omit params entirely for first page
 $tl = Invoke-SerenaRpc -Url $Url -SessionId $Sid -SessionHdrName $Hdr `
-  -Id ([guid]::NewGuid()).Guid -Method 'tools/list' -Params @{ cursor = $null } -TimeoutSec $TimeoutSec
+  -Id ([guid]::NewGuid().ToString()) -Method 'tools/list' -Params $null -TimeoutSec $TimeoutSec
 
 $toolNames = @()
 if ($tl.result -and $tl.result.tools) {
