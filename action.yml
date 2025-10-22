@@ -232,7 +232,7 @@ runs:
           # helper: dump headers object nicely
           function Dump-Headers([hashtable]$h) {
             if (-not $h) { return }
-            foreach ($k in $h.Keys) { Write-Host "  $k: $($h[$k])" }
+            foreach ($k in $h.Keys) { Write-Host "  $($k): $($h[$k])" }
           }
 
           # 1) HEAD (no streaming)
