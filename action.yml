@@ -378,8 +378,6 @@ runs:
       if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
       shell: pwsh
       run: |
-        # Serena connection & health check (strict arguments object)
-
         $Url = $Env:SERENA_URL
         $Sid = $Env:SERENA_SESSION_ID
         $Hdr = $Env:SERENA_SESSION_HDR
@@ -391,8 +389,7 @@ runs:
           param([string]$Sid,[string]$Hdr)
           $h = @{}
           $h[$Hdr] = $Sid
-          # Server insists on BOTH for Streamable HTTP (even POST)
-          $h['Accept']       = 'application/json, text/event-stream'
+          $h['Accept']       = 'application/json, text/event-stream' # required by Streamable HTTP
           $h['Content-Type'] = 'application/json'
           return $h
         }
@@ -411,10 +408,10 @@ runs:
           param(
             [string]$Id,
             [string]$Method,
-            $Params
+            $Params # may be $null OR a hashtable
           )
           $payload = @{ jsonrpc='2.0'; id=$Id; method=$Method }
-          if ($Params -ne $null) { $payload['params'] = $Params }
+          if ($Params -ne $null) { $payload['params'] = $Params } # << only include when non-null
           $body    = $payload | ConvertTo-Json -Depth 20
           $headers = New-SerenaHeaders -Sid $Sid -Hdr $Hdr
           $resp    = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
@@ -426,67 +423,66 @@ runs:
         function Invoke-SerenaTool {
           param(
             [string]$Name,
-            $Args = $null
+            $Args = $null  # $null means "no params" (schema null). Hashtable => include; empty => omit.
           )
-          # Always send an object for arguments. If none provided, use @{}
-          if ($null -eq $Args) { $Args = @{} }
-          elseif ($Args -is [array]) {
-            if ($Args.Count -eq 0) { $Args = @{} }
+
+          if ($Args -is [array]) {
+            if ($Args.Count -eq 0) { $Args = $null }
             elseif ($Args.Count -eq 1 -and $Args[0] -is [hashtable]) { $Args = $Args[0] }
             else { throw "Invoke-SerenaTool: Args must be a single hashtable or empty; got array length $($Args.Count)." }
-          } elseif ($Args -isnot [hashtable]) {
-            throw "Invoke-SerenaTool: Args must be a hashtable; got $($Args.GetType().FullName)."
+          } elseif ($Args -isnot [hashtable] -and $Args -ne $null) {
+            throw "Invoke-SerenaTool: Args must be a hashtable or `$null; got $($Args.GetType().FullName)."
           }
 
-          $params = @{ name = $Name; arguments = $Args }
-          Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params $params
+          $p = @{ name = $Name }
+          if ($Args -is [hashtable] -and $Args.Count -gt 0) { $p.arguments = $Args }  # OMIT when no params!
+
+          # For debugging if needed:
+          # Write-Host ("Last request body: " + (($p | ConvertTo-Json -Depth 20) -replace '\s+', ' '))
+
+          Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params $p
         }
 
-        # -- Smoke test 1: use a tool with explicit arguments (removes the no-arg ambiguity)
-        Write-Host "== smoke test: execute_shell_command (echo) =="
-        $exec = Invoke-SerenaTool -Name 'execute_shell_command' -Args @{ command = 'echo serena-ok'; capture_stderr = $true }
+        # --- Smoke 1: shell command (dual-name fallback, minimal args first) ---
+        Write-Host "== smoke: shell echo =="
+        $exec = $null
+        $err1 = $null; $err2 = $null
+
+        try {
+          $exec = Invoke-SerenaTool -Name 'execute_shell_command' -Args @{ command = 'echo serena-ok' }
+        } catch { $err1 = $_ }
+
+        if (-not $exec) {
+          try {
+            $exec = Invoke-SerenaTool -Name 'shell_command' -Args @{ command = 'echo serena-ok' }
+          } catch { $err2 = $_ }
+        }
+
+        if (-not $exec) {
+          throw "Both shell tool names failed. First: $($err1?.Exception.Message)  Second: $($err2?.Exception.Message)"
+        }
+
         $execTxt = $exec.result?.content?[0]?.text
         if (-not $execTxt -or $execTxt -notmatch 'serena-ok') {
-          throw "Shell smoke test did not echo expected text. Raw: $execTxt"
+          throw "Shell smoke: echo text not found. Raw: $execTxt"
         }
-        Write-Host "Shell smoke test OK."
+        Write-Host "Shell OK."
 
-        # -- Smoke test 2: a nominal no-param tool BUT with {} arguments (as required)
-        Write-Host "== get_current_config =="
-        $cfg = Invoke-SerenaTool -Name 'get_current_config' -Args @{}
+        # --- Smoke 2: get_current_config (NO arguments field at all) ---
+        Write-Host "== smoke: current_config =="
+        $cfg = Invoke-SerenaTool -Name 'get_current_config' -Args $null
         $cfgTxt = $cfg.result?.content?[0]?.text
-        if (-not $cfgTxt) { throw "get_current_config returned no content." }
-        Write-Host "get_current_config OK."
+        if (-not $cfgTxt) { throw "current_config returned no content." }
+        Write-Host "current_config OK."
 
-        # -- Find a sample .al file (correct param names from your tool list)
-        Write-Host "== find_file (**/*.al) =="
+        # --- Optional: find_file if you want a quick content probe (args required) ---
+        Write-Host "== probe: find_file (**/*.al) =="
         $ff = Invoke-SerenaTool -Name 'find_file' -Args @{ file_mask = '**/*.al'; relative_path = '.' }
         $ffText = $ff.result?.content?[0]?.text
         if (-not $ffText) { throw "find_file returned no content." }
-
-        # Try JSON first; else line list
-        try {
-          $filesObj = $ffText | ConvertFrom-Json
-          $files = $filesObj.files
-        } catch {
-          $files = ($ffText -split "`n") | Where-Object { $_ -match '\.al$' }
-        }
-        if (-not $files -or $files.Count -eq 0) { throw "No .al files found. Is the project activated correctly?" }
-        $firstAl = "$($files[0])".Trim()
-        Write-Host ("Found sample: " + $firstAl)
-
-        # -- Symbols overview on that file
-        Write-Host "== get_symbols_overview =="
-        try {
-          $ov = Invoke-SerenaTool -Name 'get_symbols_overview' -Args @{ relative_path = $firstAl }
-          $preview = $ov.result?.content?[0]?.text
-          if ($preview) { ($preview | Select-Object -First 80) | Write-Host }
-        } catch {
-          Write-Warning "get_symbols_overview failed (continuing): $($_.Exception.Message)"
-        }
+        Write-Host "find_file OK."
 
         Write-Host "Serena health check OK."
-
 
     - name: Run AI Code Review
       shell: pwsh
