@@ -201,124 +201,91 @@ runs:
 
         # Start HTTP MCP server with recommended context
         $port = 5173
-        $SerenaUrl = "http://127.0.0.1:$port/mcp"
+        $base = "http://127.0.0.1:$port"
+        $SerenaUrl = "$base/mcp"
         $out = "/tmp/serena_http.out"
         $err = "/tmp/serena_http.err"
 
-        $proc = Start-Process -FilePath $serena.Source `
-                              -ArgumentList @(
-                                'start-mcp-server',
-                                '--transport','streamable-http',
-                                '--port',"$port",
-                                '--context','ide-assistant'
-                              ) `
-                              -WorkingDirectory $env:GITHUB_WORKSPACE `
-                              -PassThru -NoNewWindow `
-                              -RedirectStandardOutput $out -RedirectStandardError $err
+        # --- Start server via dedicated entrypoint ---
+        $proc = Start-Process -FilePath "serena-mcp-server" `
+          -ArgumentList @(
+            '--transport','streamable-http',
+            '--port',"$port",
+            '--context','ide-assistant'
+          ) `
+          -WorkingDirectory $env:GITHUB_WORKSPACE `
+          -PassThru -NoNewWindow `
+          -RedirectStandardOutput $out -RedirectStandardError $err
         $SerenaPid = $proc.Id
-        $SerenaPid | Out-File /tmp/serena_http.pid -Encoding ascii
         Write-Host "Serena PID: $SerenaPid"
 
-        # ---- Handshake: obtain Mcp-Session-Id header (HEAD, then GET, then curl as fallback) ----
+        # --- Wait for port to open ---
+        $deadline = (Get-Date).AddSeconds(20)
+        do {
+          $listening = & /usr/sbin/ss -ltnp 2>$null | Select-String -Quiet ":$port "
+          if (-not $listening) { Start-Sleep -Milliseconds 300 }
+        } while (-not $listening -and (Get-Date) -lt $deadline)
+
+        if (-not $listening) {
+          Write-Host "-- serena stdout (tail) --"; if (Test-Path $out) { Get-Content $out -Tail 150 }
+          Write-Host "-- serena stderr (tail) --"; if (Test-Path $err) { Get-Content $err -Tail 150 }
+          throw "Serena HTTP server did not open port $port."
+        }
+
+        # --- Robust header probe (HEAD, GET, curl) ---
         function Get-Serena-Session {
-          param(
-            [string]$Url
-          )
+          param([string]$Url)
           Write-Host "== Probing Serena at $Url =="
+          $sessionId = $null; $headerName = $null
 
-          $sessionId = $null
-          $headerName = $null
+          function Dump-Headers([hashtable]$h){ if($h){ foreach($k in $h.Keys){ Write-Host "  $k: $($h[$k])" } } }
 
-          # helper: dump headers object nicely
-          function Dump-Headers([hashtable]$h) {
-            if (-not $h) { return }
-            foreach ($k in $h.Keys) { Write-Host "  $($k): $($h[$k])" }
-          }
-
-          # 1) HEAD (no streaming)
           try {
             $h = Invoke-WebRequest -Uri $Url -Method HEAD -TimeoutSec 3 -SkipHttpErrorCheck
-            Write-Host "-- HEAD headers --"
-            Dump-Headers $h.Headers
-            foreach ($cand in @('Mcp-Session-Id','Mcp-Session')) {
-              if ($h.Headers[$cand]) { $sessionId = "$($h.Headers[$cand])".Trim(); $headerName = $cand; break }
-            }
-            if ($sessionId) { return [pscustomobject]@{ Id=$sessionId; Name=$headerName } }
-          } catch {
-            Write-Host "HEAD failed: $($_.Exception.Message)"
-          }
+            Write-Host "-- HEAD headers --"; Dump-Headers $h.Headers
+            foreach($cand in @('Mcp-Session-Id','Mcp-Session')){ if($h.Headers[$cand]){ $sessionId = "$($h.Headers[$cand])".Trim(); $headerName=$cand; break } }
+            if ($sessionId){ return [pscustomobject]@{ Id=$sessionId; Name=$headerName } }
+          } catch { Write-Host "HEAD failed: $($_.Exception.Message)" }
 
-          # 2) GET with SSE accept
           try {
-            $g = Invoke-WebRequest -Uri $Url -Method GET -Headers @{Accept='text/event-stream'} -TimeoutSec 3 -SkipHttpErrorCheck
-            Write-Host "-- GET headers --"
-            Dump-Headers $g.Headers
-            foreach ($cand in @('Mcp-Session-Id','Mcp-Session')) {
-              if ($g.Headers[$cand]) { $sessionId = "$($g.Headers[$cand])".Trim(); $headerName = $cand; break }
-            }
-            if ($sessionId) { return [pscustomobject]@{ Id=$sessionId; Name=$headerName } }
-          } catch {
-            Write-Host "GET failed: $($_.Exception.Message)"
-          }
+            $g = Invoke-WebRequest -Uri $Url -Method GET -Headers @{Accept='text/event-stream'} -TimeoutSec 4 -SkipHttpErrorCheck
+            Write-Host "-- GET headers --"; Dump-Headers $g.Headers
+            foreach($cand in @('Mcp-Session-Id','Mcp-Session')){ if($g.Headers[$cand]){ $sessionId = "$($g.Headers[$cand])".Trim(); $headerName=$cand; break } }
+            if ($sessionId){ return [pscustomobject]@{ Id=$sessionId; Name=$headerName } }
+          } catch { Write-Host "GET failed: $($_.Exception.Message)" }
 
-          # 3) curl (more reliable for SSE)
           try {
             $raw = & /usr/bin/curl -sS -D - -o /dev/null -H 'Accept: text/event-stream' "$Url"
             $rawNoCR = $raw -replace "`r",""
-            Write-Host "-- curl -D - raw headers --"
-            $rawNoCR -split "`n" | ForEach-Object { Write-Host "  $_" }
-
-            # robust parse: match either header name, any casing
+            Write-Host "-- curl -D - raw headers --"; $rawNoCR -split "`n" | ForEach-Object { Write-Host "  $_" }
             $m = [regex]::Match($rawNoCR, '(?im)^\s*(Mcp-Session-Id|Mcp-Session)\s*:\s*(.+?)\s*$')
-            if ($m.Success) {
-              $headerName = $m.Groups[1].Value
-              $sessionId  = $m.Groups[2].Value.Trim()
-              return [pscustomobject]@{ Id=$sessionId; Name=$headerName }
-            }
-          } catch {
-            Write-Host "curl probe failed: $($_.Exception.Message)"
-          }
+            if ($m.Success){ return [pscustomobject]@{ Id=$m.Groups[2].Value.Trim(); Name=$m.Groups[1].Value } }
+          } catch { Write-Host "curl probe failed: $($_.Exception.Message)" }
 
           return $null
         }
 
-        $urlsToTry = @(
-          $SerenaUrl,                               # e.g. http://127.0.0.1:5173/mcp
-          ($SerenaUrl.TrimEnd('/')) + '/'           # also try trailing slash
-        )
-
+        $urlsToTry = @("$base/mcp","$base/mcp/","$base/")
         $session = $null
-        foreach ($u in $urlsToTry) {
-          $session = Get-Serena-Session -Url $u
-          if ($session) {
-            $SerenaUrl = $u   # lock in the exact URL that worked
-            break
-          }
-        }
+        foreach($u in $urlsToTry){ $session = Get-Serena-Session -Url $u; if($session){ $SerenaUrl = $u; break } }
 
         if (-not $session) {
-          Write-Host "Failed to obtain a session header from Serena. Tailing stderr:"
-          if (Test-Path $err) { Get-Content $err -Tail 200 }
-          throw "Serena handshake failed: no Mcp session header found on any probe."
+          Write-Host "-- serena stdout (tail) --"; if (Test-Path $out) { Get-Content $out -Tail 150 }
+          Write-Host "-- serena stderr (tail) --"; if (Test-Path $err) { Get-Content $err -Tail 150 }
+          throw "Serena handshake failed: no Mcp session header found."
         }
 
         Write-Host "Using session header name: $($session.Name)"
         Write-Host "Using session id value : $($session.Id)"
 
-        # ---- Initialize JSON-RPC ----
-        $initBody = @{
-          jsonrpc = '2.0'
-          id      = 'init-1'
-          method  = 'initialize'
-          params  = @{ protocolVersion = '2024-10-07'; capabilities = @{} }
-        } | ConvertTo-Json -Depth 6
-
-        $initResp = Invoke-RestMethod -Uri $SerenaUrl -Method Post -ContentType 'application/json' `
-          -Headers @{ $session.Name = $session.Id } -Body $initBody -SkipHttpErrorCheck
-
+        # Initialize
+        $initBody = @{ jsonrpc='2.0'; id='init-1'; method='initialize'; params=@{ protocolVersion='2024-10-07'; capabilities=@{} } } | ConvertTo-Json -Depth 6
+        $initResp = Invoke-RestMethod -Uri $SerenaUrl -Method Post -ContentType 'application/json' -Headers @{ $session.Name = $session.Id } -Body $initBody -SkipHttpErrorCheck
         if (-not $initResp -or -not $initResp.result) {
           Write-Host "Initialize response (raw): $($initResp | ConvertTo-Json -Depth 6 -Compress)"
-          throw "Serena initialize failed (no result)."
+          Write-Host "-- serena stdout (tail) --"; if (Test-Path $out) { Get-Content $out -Tail 150 }
+          Write-Host "-- serena stderr (tail) --"; if (Test-Path $err) { Get-Content $err -Tail 150 }
+          throw "Serena initialize failed."
         }
 
         "SERENA_URL=$SerenaUrl"              | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
