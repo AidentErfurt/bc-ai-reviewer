@@ -136,7 +136,6 @@ inputs:
     type: boolean
     default: false
 
-  # Serena (MCP over HTTP)
   ENABLE_SERENA:
     description: "Enable Serena MCP enrichment (symbols, where-used, rich snippets)"
     type: boolean
@@ -171,6 +170,7 @@ runs:
       working-directory: ${{ github.action_path }}
       run: npm install --no-save parse-diff@latest
 
+    # Serena: start a local server only if no external URL is provided
     # Serena needs Python 3.11 (rejects 3.12)
     - name: Setup Python 3.11 for Serena
       if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
@@ -178,286 +178,18 @@ runs:
       with:
         python-version: '3.11'
 
-    - name: Install & Start Serena (HTTP)
+    - name: Serena - Start local server (if needed)
       if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
       shell: pwsh
-      run: |
-        # Ensure local bin on PATH
-        "$HOME/.local/bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding ascii
-        $env:PATH = "$HOME/.local/bin" + [IO.Path]::PathSeparator + $env:PATH
+      run: . '${{ github.action_path }}/scripts/serena-start.ps1'
 
-        # Use the Python 3.11
-        $pyDir = $env:pythonLocation
-        if (-not $pyDir) { throw "pythonLocation env var not set by setup-python." }
-        $py = Join-Path $pyDir "bin/python"
-
-        # Install pipx + Serena
-        & $py -m pip install --user --upgrade pip pipx | Out-String | Write-Host
-        & $py -m pipx ensurepath | Out-String | Write-Host
-        & $py -m pipx install --python "$py" "git+https://github.com/oraios/serena" | Out-String | Write-Host
-
-        $serena = Get-Command serena -ErrorAction Stop
-        Write-Host "Serena binary: $($serena.Source)"
-
-        # Start HTTP MCP server with recommended context
-        $port = 5173
-        $base = "http://127.0.0.1:$port"
-        $SerenaUrl = "$base/mcp"
-        $out = "/tmp/serena_http.out"
-        $err = "/tmp/serena_http.err"
-
-        # --- Start server via dedicated entrypoint ---
-        $proc = Start-Process -FilePath "serena-mcp-server" `
-          -ArgumentList @(
-            '--transport','streamable-http',
-            '--port',"$port",
-            '--context','ide-assistant'
-          ) `
-          -WorkingDirectory $env:GITHUB_WORKSPACE `
-          -PassThru -NoNewWindow `
-          -RedirectStandardOutput $out -RedirectStandardError $err
-        $SerenaPid = $proc.Id
-        Write-Host "Serena PID: $SerenaPid"
-
-        # --- Wait for HTTP to answer before header probing ---
-        $deadline = (Get-Date).AddSeconds(25)
-        $ready = $false
-        do {
-          try {
-            # try a quick GET; any status that isn't "cannot connect" means listener is up
-            $resp = Invoke-WebRequest -Uri "$base/mcp" -Method GET -Headers @{Accept='text/event-stream'} -TimeoutSec 2 -SkipHttpErrorCheck
-            $ready = $true
-          } catch {
-            # connection refused / timeout -> not ready yet
-            if ($proc.HasExited) {
-              Write-Host "-- serena stdout (tail) --"; if (Test-Path $out) { Get-Content $out -Tail 150 }
-              Write-Host "-- serena stderr (tail) --"; if (Test-Path $err) { Get-Content $err -Tail 150 }
-              throw "Serena process exited before HTTP became ready."
-            }
-            Start-Sleep -Milliseconds 300
-          }
-        } while (-not $ready -and (Get-Date) -lt $deadline)
-
-        if (-not $ready) {
-          Write-Host "-- serena stdout (tail) --"; if (Test-Path $out) { Get-Content $out -Tail 150 }
-          Write-Host "-- serena stderr (tail) --"; if (Test-Path $err) { Get-Content $err -Tail 150 }
-          throw "Serena HTTP endpoint didn’t become reachable at $base/mcp."
-        }
-
-        # --- Robust header probe (HEAD, GET, curl) ---
-        function Get-Serena-Session {
-          param([string]$Url)
-          Write-Host "== Probing Serena at $Url =="
-          $sessionId = $null; $headerName = $null
-
-          function Dump-Headers([hashtable]$h){ if($h){ foreach($k in $h.Keys){ Write-Host "  $($k): $($h[$k])" } } }
-
-          try {
-            $h = Invoke-WebRequest -Uri $Url -Method HEAD -TimeoutSec 3 -SkipHttpErrorCheck
-            Write-Host "-- HEAD headers --"; Dump-Headers $h.Headers
-            foreach($cand in @('Mcp-Session-Id','Mcp-Session')){ if($h.Headers[$cand]){ $sessionId = "$($h.Headers[$cand])".Trim(); $headerName=$cand; break } }
-            if ($sessionId){ return [pscustomobject]@{ Id=$sessionId; Name=$headerName } }
-          } catch { Write-Host "HEAD failed: $($_.Exception.Message)" }
-
-          try {
-            $g = Invoke-WebRequest -Uri $Url -Method GET -Headers @{Accept='text/event-stream'} -TimeoutSec 4 -SkipHttpErrorCheck
-            Write-Host "-- GET headers --"; Dump-Headers $g.Headers
-            foreach($cand in @('Mcp-Session-Id','Mcp-Session')){ if($g.Headers[$cand]){ $sessionId = "$($g.Headers[$cand])".Trim(); $headerName=$cand; break } }
-            if ($sessionId){ return [pscustomobject]@{ Id=$sessionId; Name=$headerName } }
-          } catch { Write-Host "GET failed: $($_.Exception.Message)" }
-
-          try {
-            $raw = & /usr/bin/curl -sS -D - -o /dev/null -H 'Accept: text/event-stream' "$Url"
-            $rawNoCR = $raw -replace "`r",""
-            Write-Host "-- curl -D - raw headers --"; $rawNoCR -split "`n" | ForEach-Object { Write-Host "  $_" }
-            $m = [regex]::Match($rawNoCR, '(?im)^\s*(Mcp-Session-Id|Mcp-Session)\s*:\s*(.+?)\s*$')
-            if ($m.Success){ return [pscustomobject]@{ Id=$m.Groups[2].Value.Trim(); Name=$m.Groups[1].Value } }
-          } catch { Write-Host "curl probe failed: $($_.Exception.Message)" }
-
-          return $null
-        }
-
-        $urlsToTry = @("$base/mcp","$base/mcp/","$base/")
-        $session = $null
-        foreach($u in $urlsToTry){ $session = Get-Serena-Session -Url $u; if($session){ $SerenaUrl = $u; break } }
-
-        if (-not $session) {
-          Write-Host "-- serena stdout (tail) --"; if (Test-Path $out) { Get-Content $out -Tail 150 }
-          Write-Host "-- serena stderr (tail) --"; if (Test-Path $err) { Get-Content $err -Tail 150 }
-          throw "Serena handshake failed: no Mcp session header found."
-        }
-
-        Write-Host "Using session header name: $($session.Name)"
-        Write-Host "Using session id value : $($session.Id)"
-
-        # ---- Initialize over SSE ----
-        $initBodyObj = @{
-          jsonrpc = '2.0'
-          id      = 'init-1'
-          method  = 'initialize'
-          params  = @{
-            protocolVersion = '2024-10-07'
-            capabilities    = @{}
-            clientInfo      = @{ name='bc-ai-reviewer'; version='0.1.0' }
-          }
-        }
-        $initBody = $initBodyObj | ConvertTo-Json -Depth 8
-
-        # Put BOTH headers explicitly in -Headers so nothing overwrites Accept
-        $headers = @{
-          $session.Name = $session.Id
-          'Accept'      = 'application/json, text/event-stream'
-          'Content-Type'= 'application/json'
-        }
-
-        # Use Invoke-WebRequest (returns raw content string), not Invoke-RestMethod
-        $resp = Invoke-WebRequest -Uri $SerenaUrl -Method POST -Headers $headers -Body $initBody -SkipHttpErrorCheck
-        [string]$rawText = $resp.Content
-
-        # Parse SSE: grab the last "data: {...}" line
-        $lastJsonLine = ($rawText -split "`n" | Where-Object { $_.TrimStart().StartsWith('data: ') }) | Select-Object -Last 1
-        if (-not $lastJsonLine) {
-          Write-Host "Initialize response (raw): $rawText"
-          throw "Serena initialize failed: no SSE data line."
-        }
-        $jsonPart = $lastJsonLine.Substring($lastJsonLine.IndexOf('data: ') + 6).Trim()
-        $initObj = $null
-        try { $initObj = $jsonPart | ConvertFrom-Json } catch { }
-
-        if (-not $initObj) {
-          Write-Host "Initialize response (raw): $rawText"
-          throw "Serena initialize failed: invalid JSON in SSE payload."
-        }
-        if ($initObj.error) {
-          Write-Host "Initialize response (raw): $rawText"
-          throw "Serena initialize failed: $($initObj.error.code) $($initObj.error.message)"
-        }
-        if (-not $initObj.result) {
-          Write-Host "Initialize response (raw): $rawText"
-          throw "Serena initialize failed: no result in initialize response."
-        }
-
-        # Success -> export env vars
-        "SERENA_URL=$SerenaUrl"               | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
-        "SERENA_SESSION_ID=$($session.Id)"    | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
-        "SERENA_SESSION_HDR=$($session.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
-        Write-Host "SERENA_URL set to $SerenaUrl"
-        Write-Host "SERENA_SESSION_ID captured."
-
-
-
-
-        # # ---- Optional: activate every app.json parent as a Serena project ----
-        # Write-Host "== app.json discovery =="
-        # $apps = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter 'app.json' -Recurse -File -ErrorAction SilentlyContinue
-        # if ($apps) {
-        #   $apps | ForEach-Object { Write-Host "• $($_.FullName)" }
-        #   foreach ($app in $apps) {
-        #     $projDir = Split-Path $app.FullName -Parent
-        #     Write-Host "Activating project: $projDir"
-        #     $callBody = @{
-        #       jsonrpc = '2.0'
-        #       id = [guid]::NewGuid().ToString()
-        #       method = 'tools/call'
-        #       params = @{
-        #         name = 'activate_project'
-        #         arguments = @{ project = $projDir }
-        #       }
-        #     } | ConvertTo-Json -Depth 10 -Compress
-        #     try {
-        #       Invoke-RestMethod -Uri $SerenaUrl -Method Post -ContentType 'application/json' -Headers @{ 'Mcp-Session-Id' = $sessionId } -Body $callBody | Out-Null
-        #     } catch {
-        #       Write-Warning "activate_project failed for $projDir: $($_.Exception.Message)"
-        #     }
-        #   }
-        # } else {
-        #   Write-Host "No app.json found under $env:GITHUB_WORKSPACE"
-        # }
-
-    - name: Serena connection & health check
-      if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
+    - name: Serena - Initialize, list tools, check required, activate projects
+      if: ${{ inputs.ENABLE_SERENA == 'true' }}
       shell: pwsh
-      run: |
-        $Url = $Env:SERENA_URL
-        $Sid = $Env:SERENA_SESSION_ID
-        $Hdr = $Env:SERENA_SESSION_HDR
-        if (-not $Url -or -not $Sid -or -not $Hdr) { throw "SERENA_URL / SERENA_SESSION_ID / SERENA_SESSION_HDR not set." }
-
-        $TimeoutSec = [int](${Env:SERENA_TIMEOUT_SEC} ?? 60)
-
-        function New-SerenaHeaders {
-          param([string]$Sid,[string]$Hdr)
-          $h = @{}
-          $h[$Hdr] = $Sid
-          $h['Accept']       = 'application/json, text/event-stream' # required by Streamable HTTP
-          $h['Content-Type'] = 'application/json'
-          return $h
-        }
-
-        function Parse-SerenaResponse {
-          param([string]$Raw)
-          $trim = $Raw.Trim()
-          if ($trim.StartsWith('{')) { return ($trim | ConvertFrom-Json) }
-          $last = ($Raw -split "`n" | Where-Object { $_.TrimStart().StartsWith('data: ') }) | Select-Object -Last 1
-          if (-not $last) { throw "No SSE data line in response." }
-          $json = $last.Substring($last.IndexOf('data: ') + 6).Trim()
-          return ($json | ConvertFrom-Json)
-        }
-
-        function Invoke-SerenaRpc {
-          param(
-            [string]$Id,
-            [string]$Method,
-            $Params # may be $null OR a hashtable
-          )
-          $payload = @{ jsonrpc='2.0'; id=$Id; method=$Method }
-          if ($Params -ne $null) { $payload['params'] = $Params } # << only include when non-null
-          $body    = $payload | ConvertTo-Json -Depth 20
-          $headers = New-SerenaHeaders -Sid $Sid -Hdr $Hdr
-          $resp    = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
-          $obj     = Parse-SerenaResponse -Raw ([string]$resp.Content)
-          if ($obj.error) { throw "RPC $Method failed: $($obj.error.code) $($obj.error.message)" }
-          return $obj
-        }
-
-        function Invoke-SerenaTool {
-          param(
-            [string]$Name,
-            $ToolArgs = $null
-          )
-
-          # normalize/validate
-          if ($ToolArgs -is [array]) {
-            if ($ToolArgs.Count -eq 0) { $ToolArgs = $null }
-            elseif ($ToolArgs.Count -eq 1 -and $ToolArgs[0] -is [hashtable]) { $ToolArgs = $ToolArgs[0] }
-            else { throw "Invoke-SerenaTool: ToolArgs must be a single hashtable or empty; got array length $($ToolArgs.Count)." }
-          } elseif ($ToolArgs -isnot [hashtable] -and $ToolArgs -ne $null) {
-            throw "Invoke-SerenaTool: ToolArgs must be a hashtable or `$null; got $($ToolArgs.GetType().FullName)."
-          }
-
-          $p = @{ name = $Name }
-          if ($ToolArgs -is [hashtable] -and $ToolArgs.Count -gt 0) { $p.arguments = $ToolArgs }  # omit when none
-
-          # For debugging if needed:
-          Write-Host ("Last request body: " + ($p | ConvertTo-Json -Depth 20))
-
-          Invoke-SerenaRpc -Id ([guid]::NewGuid()) -Method 'tools/call' -Params $p
-        }
-
-        # Shell smoke (dual-name fallback)
-        $exec = $null; $err1=$null; $err2=$null
-        try { $exec = Invoke-SerenaTool -Name 'execute_shell_command' -ToolArgs @{ command = 'echo serena-ok' } } catch { $err1 = $_ }
-        if (-not $exec) {
-          try { $exec = Invoke-SerenaTool -Name 'shell_command' -ToolArgs @{ command = 'echo serena-ok' } } catch { $err2 = $_ }
-        }
-
-        # get_current_config — NO arguments at all (schema null)
-        $cfg = Invoke-SerenaTool -Name 'get_current_config' -ToolArgs $null
-
-        # find_file — explicit arguments as per your tool list
-        $ff = Invoke-SerenaTool -Name 'find_file' -ToolArgs @{ file_mask = '**/*.al'; relative_path = '.' }
-
-        Write-Host "Serena health check OK."
+      env:
+        SERENA_URL_INPUT: ${{ inputs.SERENA_URL }}
+        SERENA_TIMEOUT_SEC: ${{ inputs.SERENA_TIMEOUT_SEC }}
+      run: . '${{ github.action_path }}/scripts/serena-handshake.ps1'
 
     - name: Run AI Code Review
       shell: pwsh
@@ -518,12 +250,7 @@ runs:
 
         Invoke-AICodeReview @p
 
-    - name: Stop Serena HTTP
+    - name: Serena - Stop local server
       if: ${{ inputs.ENABLE_SERENA == 'true' && inputs.SERENA_URL == '' }}
       shell: pwsh
-      run: |
-        if (Test-Path /tmp/serena_http.pid) {
-          $SerenaPidFromFile = Get-Content /tmp/serena_http.pid
-          Write-Host "Stopping Serena PID $SerenaPidFromFile"
-          try { Stop-Process -Id $SerenaPidFromFile -ErrorAction SilentlyContinue } catch {}
-        }
+      run: . '${{ github.action_path }}/scripts/serena-stop.ps1'
