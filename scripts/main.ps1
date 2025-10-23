@@ -1077,7 +1077,7 @@ Process {
                     ForEach-Object { $_.FullName.Replace('\','/') })
 
     # Map: AppRootAbs => [list of file objects from $relevant]
-    $groups = [ordered]@{}
+    $groups = @{}
     foreach ($f in $relevant) {
         $appRoot = Get-AppRootForFile -RepoRoot $repoRoot -RepoRelPath $f.path -AllApps $allAppJsons
         if (-not $groups.ContainsKey($appRoot)) {
