@@ -735,6 +735,41 @@ closingIssuesReferences(first: 50) {
         return $arr | Select-Object -First ([math]::Min($Max, $arr.Count))
     }
 
+    function Normalize-SerenaSymbolsOverview {
+        param($raw)
+
+        if (-not $raw) { return @() }
+
+        # 1) Already the final shape: object with .symbols
+        if ($raw.PSObject.Properties['symbols']) {
+            return @($raw.symbols)
+        }
+
+        # 2) Already an array of symbols
+        if ($raw -is [System.Collections.IEnumerable] -and -not ($raw -is [string])) {
+            return @($raw)
+        }
+
+        # 3) JSON string payloads (most common): try to parse
+        $jsonText = $null
+        if ($raw -is [string]) {
+            $jsonText = $raw
+        } elseif ($raw.PSObject.Properties['structuredContent'] -and $raw.structuredContent.result) {
+            $jsonText = [string]$raw.structuredContent.result
+        } elseif ($raw.PSObject.Properties['content'] -and $raw.content -and $raw.content[0].text) {
+            $jsonText = [string]$raw.content[0].text
+        }
+
+        if ($jsonText) {
+            try {
+                $parsed = $jsonText | ConvertFrom-Json
+                if ($parsed) { return @($parsed) }
+            } catch { }
+        }
+
+        return @()
+    }
+
     # Sererna path helpers
     function Get-RelTo {
         param([Parameter(Mandatory)][string]$Base,
@@ -1174,16 +1209,26 @@ Process {
             $relProjectPath = Get-RelTo -Base $appRoot -AbsPath $absFile   # e.g. "HelloWorld.al"
 
             # Per-file symbols overview (Serena)
+            $sym = $null  # reset per file
             if ($EnableSerena -and $SerenaUrl) {
-                $sym = Get-SerenaSymbolsOverview -RelPath $relProjectPath
-                if ($sym) {
-                    # add as context artifact (repo-relative name in artifact)
+                $symRaw   = Get-SerenaSymbolsOverview -RelPath $relProjectPath
+                $symList  = Normalize-SerenaSymbolsOverview $symRaw  # <-- robust across shapes
+
+                if ($symList -and $symList.Count) {
+                    # Store a compact JSON artifact; avoid double-encoding when $symRaw is already a JSON string
+                    $ctxContent = if ($symRaw -is [string]) { $symRaw } else { ($symList | ConvertTo-Json -Depth 10) }
                     $ctxFiles += [pscustomobject]@{
                         path    = "Serena/Symbols/$($f.path).json"
-                        content = ($sym | ConvertTo-Json -Depth 10)
+                        content = $ctxContent
                     }
-                    $serenaIndex.symbols[$f.path] = $sym
+
+                    # Keep an object around that has a .symbols-like field for downstream code
+                    $sym = [pscustomobject]@{ symbols = $symList }
+                    $serenaIndex.symbols[$f.path] = $sym  # index uses normalized shape
                     Write-Host "  + symbols: $($f.path)  ⇢  [$relProjectPath]"
+                } else {
+                    # still keep a safe empty symbol set so downstream checks are simple
+                    $sym = [pscustomobject]@{ symbols = @() }
                 }
             }
 
