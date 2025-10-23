@@ -694,14 +694,14 @@ closingIssuesReferences(first: 50) {
     ############################################################################
 
     # Thin wrapper so the rest of the script does not care about headers
-    function Serena-Call([string]$Tool,[hashtable]$Args=@{}) {
+    function Serena-Call([string]$Tool,[hashtable]$ToolArgs=@{}) {
         if (-not $EnableSerena -or [string]::IsNullOrWhiteSpace($SerenaUrl)) { return $null }
         Invoke-SerenaTool `
             -Url $SerenaUrl `
             -SessionId $SerenaSessionId `
             -SessionHdrName $SerenaSessionHdr `
             -Name $Tool `
-            -ToolArgs $Args `
+            -ToolArgs $ToolArgs `
             -TimeoutSec $SerenaTimeoutSec
     }
 
