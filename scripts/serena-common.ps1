@@ -43,14 +43,14 @@ function Invoke-SerenaRpc {
   if ($includeParams) { $payload['params'] = $Params }
 
   $body = ($payload | ConvertTo-Json -Depth 30)
-
+  
   # DEBUG: print the body we're *actually* sending
   Write-Host ">>> Serena RPC request ($Method): $body"
 
   $headers = New-SerenaHeaders -Sid $SessionId -Hdr $SessionHdrName
   try {
     $resp = Invoke-WebRequest -Uri $Url -Method POST -Headers $headers -Body $body `
-              -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
+              -ContentType 'application/json' -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
   } catch {
     Write-Host "HTTP exception for $($Method): $($_.Exception.Message)"
     throw
@@ -61,12 +61,31 @@ function Invoke-SerenaRpc {
   Write-Host "<<< Serena RPC raw response ($Method): $($raw.Substring(0,[Math]::Min($raw.Length, 2000)))"
 
   $obj = Parse-SerenaResponse -Raw $raw
-  if ($obj.error) {
-    # Show full error object if present
+  if (-not $obj) { throw "RPC $Method failed: empty/invalid response" }
+
+  # Robust error handling
+  $hasTopErrorProp = $obj.PSObject.Properties.Match('error').Count -gt 0
+  if ($hasTopErrorProp -and $obj.error) {
     $errJson = ($obj.error | ConvertTo-Json -Depth 30)
     Write-Host "!!! Serena RPC error ($Method): $errJson"
-    throw "RPC $Method failed: $($obj.error.code) $($obj.error.message)"
+    $code = $obj.error.PSObject.Properties['code']?.Value
+    $msg  = $obj.error.PSObject.Properties['message']?.Value
+    throw ("RPC {0} failed: {1} {2}" -f $Method, ($code ?? ''), ($msg ?? ($errJson)))
   }
+
+  $isSerenaError = $obj.PSObject.Properties['result'] -and ($obj.result.PSObject.Properties['isError'] -and $obj.result.isError -eq $true)
+  if ($isSerenaError) {
+    # Try to surface the first text message if present
+    $msg = $null
+    if ($obj.result.PSObject.Properties['content']) {
+      $msg = ($obj.result.content | Where-Object { $_.type -eq 'text' } | Select-Object -First 1 -ExpandProperty text)
+    }
+    if (-not $msg -and $obj.result.PSObject.Properties['structuredContent']) {
+      $msg = ($obj.result.structuredContent | ConvertTo-Json -Depth 10)
+    }
+    throw ("RPC {0} failed (isError=true): {1}" -f $Method, ($msg ?? 'No error message provided'))
+  }
+
   return $obj
 }
 
