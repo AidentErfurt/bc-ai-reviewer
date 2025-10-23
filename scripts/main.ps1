@@ -755,61 +755,134 @@ closingIssuesReferences(first: 50) {
         return $RepoRoot   # fallback: repo-root as project
     }
 
-    ############################################################################
-    # Helper: AL parser to extract changed procedures/triggers & top-level objects
-    ############################################################################
-
-    function Get-AlTopLevelObject {
-        param([string]$Text)
-        $rx = [regex]'(?im)^(table|page|pageextension|tableextension|codeunit|enum|report)\s+(\d+)?\s*("([^"]+)"|[A-Za-z_][\w]*)'
-        $m = $rx.Match($Text)
-        if (-not $m.Success) { return $null }
-        $name = if ($m.Groups[4].Success) { $m.Groups[4].Value } else { $m.Groups[3].Value }
-        [pscustomobject]@{
-            type = $m.Groups[1].Value
-            id   = if ($m.Groups[2].Success) { [int]$m.Groups[2].Value } else { $null }
-            name = $name
+    ###########################################################################
+     # Helper: Serena snippet helpers
+    ###########################################################################
+    function Get-SerenaSymbolContent([string]$NamePath,[string]$RelPath) {
+        # Primary: get_symbol_content (fast, body-only)
+        $res = Serena-Call 'get_symbol_content' @{
+            name_path     = $NamePath
+            relative_path = $RelPath
         }
-    }
+        if ($res -and $res.PSObject.Properties['text'] -and $res.text) { return $res }
 
-    function Get-AlChangedSymbols {
-        param(
-            [string]$Text,
-            [int[]] $TouchedLines
-        )
-        $lines = $Text -split "`n"
-        $rxDef = [regex]'(?im)^(?:procedure|trigger)\s+("?[\w\d_]+"?)\s*\('
-        $defs = @()
-        for ($i=0; $i -lt $lines.Length; $i++) {
-            $m = $rxDef.Match($lines[$i])
-            if ($m.Success) {
-                $nm = $m.Groups[1].Value.Trim('"')
-                $defs += [pscustomobject]@{ name=$nm; start=($i+1) }  # 1-based
+        # Fallbacks (optional, only if your Serena build has these):
+        try {
+            $res2 = Serena-Call 'read_code_snippet' @{
+                name_path     = $NamePath
+                relative_path = $RelPath
+            }
+            if ($res2 -and $res2.PSObject.Properties['text'] -and $res2.text) { return $res2 }
+        } catch {}
+
+        return $null
+    }
+ 
+    function Get-ChangedSpansFromFile($fileObj) {
+        # Returns array of @{ start = <int>; end = <int> } for HEAD (ln2) changes
+        $lns = @()
+        foreach ($chunk in $fileObj.chunks) {
+            foreach ($chg in $chunk.changes) {
+                if ($chg.ln2) { $lns += [int]$chg.ln2 }
             }
         }
-        if (-not $defs) { return @() }
-        # mark defs that are within ~50 lines of any touched line
-        $win = 50
-        $picked = @()
-        foreach ($d in $defs) {
-            foreach ($t in $TouchedLines) {
-                if ([math]::Abs($t - $d.start) -le $win) { $picked += $d; break }
-            }
+        if (-not $lns) { return @() }
+        $lns = $lns | Sort-Object -Unique
+        # Merge contiguous lines into spans
+        $spans = @()
+        $s = $lns[0]; $e = $lns[0]
+        for ($i=1; $i -lt $lns.Count; $i++) {
+            if ($lns[$i] -eq $e + 1) { $e = $lns[$i]; continue }
+            $spans += @{ start = $s; end = $e }
+            $s = $lns[$i]; $e = $lns[$i]
         }
-        # de-dupe by name
-        return ($picked | Group-Object name | ForEach-Object { $_.Group[0] })
+        $spans += @{ start = $s; end = $e }
+        return $spans
+    }
+ 
+    function Get-SymbolRange($symItem) {
+        # Normalise various schema shapes that Serena servers might return
+        $start = $null; $end = $null
+        if ($symItem.location -and $symItem.location.start -and $symItem.location.end) {
+            $start = [int]$symItem.location.start.line
+            $end   = [int]$symItem.location.end.line
+        } elseif ($symItem.range -and $symItem.range.start -and $symItem.range.end) {
+            $start = [int]$symItem.range.start.line
+            $end   = [int]$symItem.range.end.line
+        } elseif ($symItem.PSObject.Properties['start_line'] -and $symItem.PSObject.Properties['end_line']) {
+            $start = [int]$symItem.start_line
+            $end   = [int]$symItem.end_line
+        }
+        if (-not $start -or -not $end) { return $null }
+        return @{ start = $start; end = $end }
+    }
+ 
+    function Test-Overlap($a, $b) {
+    if (-not $a -or -not $b) { return $false }
+        return ($a.start -le $b.end -and $b.start -le $a.end)
     }
 
-    function Get-BlockSnippetAround {
+    ###########################################################################
+    # Helper: Client-side snippet slicer (HEAD content -> slice by line range)
+    ###########################################################################
+    function Get-RepoSnippet {
         param(
-            [string]$Text,
-            [int]$StartLine,
-            [int]$MaxLines = 200
+            [Parameter(Mandatory)][string]$Owner,
+            [Parameter(Mandatory)][string]$Repo,
+            [Parameter(Mandatory)][string]$Path,      # repo-relative
+            [Parameter(Mandatory)][string]$RefSha,    # usually $pr.head.sha
+            [Parameter(Mandatory)][hashtable]$Range,  # @{ start = <int>; end = <int> } (1-based, inclusive)
+            [int]$PadBefore = 6,
+            [int]$PadAfter  = 4,
+            [int]$MaxBytes  = 8192
         )
-        $lines = $Text -split "`n"
-        $s = [math]::Max(1, $StartLine - 10)
-        $e = [math]::Min($lines.Length, $StartLine + $MaxLines - 1)
-        ($lines[($s-1)..($e-1)] -join "`n")
+
+        $text = Get-FileContent -Owner $Owner -Repo $Repo -Path $Path -RefSha $RefSha
+        if (-not $text) { return $null }
+
+        # Split into lines (robust to CRLF/LF)
+        $lines = $text -split "`r?`n", 0
+
+        # Clamp, pad, and slice (1-based input)
+        $start = [math]::Max(1, [int]$Range.start - $PadBefore)
+        $end   = [math]::Min($lines.Length, [int]$Range.end + $PadAfter)
+        if ($end -lt $start) { return $null }
+
+        $snippet = ($lines[($start-1)..($end-1)] -join "`n")
+
+        # Keep snippet small; reduce padding first, then hard-trim if still large
+        if ([Text.Encoding]::UTF8.GetByteCount($snippet) -gt $MaxBytes) {
+
+            # progressively REDUCE padding from the requested PadBefore/PadAfter down to 0
+            $maxShrink = [math]::Max($PadBefore, $PadAfter)
+            for ($k = 0; $k -le $maxShrink; $k++) {
+                $before = [math]::Max(0, $PadBefore - $k)
+                $after  = [math]::Max(0, $PadAfter  - $k)
+
+                $s2 = [math]::Max(1, [int]$Range.start - $before)
+                $e2 = [math]::Min($lines.Length, [int]$Range.end + $after)
+
+                $snippet = ($lines[($s2-1)..($e2-1)] -join "`n")
+                if ([Text.Encoding]::UTF8.GetByteCount($snippet) -le $MaxBytes) {
+                    $start = $s2; $end = $e2
+                    break
+                }
+            }
+
+            # if still too large, as a last resort do a hard byte-trim
+            if ([Text.Encoding]::UTF8.GetByteCount($snippet) -gt $MaxBytes) {
+                $bytes   = [Text.Encoding]::UTF8.GetBytes($snippet)
+                $snippet = [Text.Encoding]::UTF8.GetString($bytes, 0, $MaxBytes)
+                # note: may cut mid-line / mid-codepoint; acceptable for compact context
+            }
+        }
+
+        return [pscustomobject]@{
+            text           = $snippet
+            start          = $start
+            end            = $end
+            original_range = $Range
+        }
     }
 
     ############################################################################
@@ -1067,9 +1140,7 @@ Process {
     #     - Activate the right project per group
     #     - Use project-relative paths for Serena tools
     ############################################################################
-    $serenaIndex = @{ symbols = @{}; whereUsed = @{} }  # path -> overview, "path#symbol" -> refs[]
-    $bcObjects    = @()
-    $richSnippets = @()
+    $serenaIndex = @{ symbols = @{}; whereUsed = @{}; snippets = @{} }  # path -> overview, "path#symbol" -> refs[], code snippets map
 
     # Build app groups
     $repoRoot    = $Env:GITHUB_WORKSPACE
@@ -1097,22 +1168,7 @@ Process {
         }
 
         foreach ($f in ($groups[$appRoot] | Where-Object { $_.path -like '*.al' })) {
-
-            # HEAD content for AL parsing / snippets (repo-relative path stays as-is)
-            $headContent = Get-FileContent -Owner $owner -Repo $repo -Path $f.path -RefSha $headRef
-            if (-not $headContent) { continue }
-
-            # Top-level object metadata
-            $obj = Get-AlTopLevelObject -Text $headContent
-            if ($obj) {
-                $bcObjects += [pscustomobject]@{
-                    path       = $f.path
-                    objectType = $obj.type
-                    objectId   = $obj.id
-                    objectName = $obj.name
-                }
-            }
-
+            $sym = $null
             # Compute path RELATIVE to the current Serena project (app root)
             $absFile       = Join-Path $repoRoot $f.path
             $relProjectPath = Get-RelTo -Base $appRoot -AbsPath $absFile   # e.g. "HelloWorld.al"
@@ -1131,37 +1187,85 @@ Process {
                 }
             }
 
-            # Changed defs near touched lines (for snippets & where-used)
-            $touched = if ($validLines.ContainsKey($f.path)) { @($validLines[$f.path]) } else { @() }
-            $defs    = Get-AlChangedSymbols -Text $headContent -TouchedLines $touched
+            # Identify overlapping symbols (changed lines ↔ symbol ranges)
+            $defs = @()
+            if ($EnableSerena -and $SerenaUrl -and $sym) {
+                $spans = Get-ChangedSpansFromFile $f
+                $symList = @($sym.symbols)
+                foreach ($item in $symList) {
+                    $r = Get-SymbolRange $item
+                    if (-not $r) { continue }
+                    foreach ($span in $spans) {
+                        if (Test-Overlap $r $span) {
+                            # record the symbol once
+                            $defs += [pscustomobject]@{
+                                name      = ($item.name_path ?? $item.name ?? $item.symbol ?? '<unknown>')
+                                name_path = ($item.name_path ?? $item.name ?? $item.symbol ?? '<unknown>')
+                                type      = ($item.type ?? $item.kind ?? 'symbol')
+                                range     = $r
+                            }
+                            break
+                        }
+                    }
+                }
+                # de-duplicate by name_path
+                $defs = $defs | Sort-Object name_path -Unique
+            }
 
-            # Rich code snippets around changed defs
-            foreach ($d in $defs) {
-                $snippet = Get-BlockSnippetAround -Text $headContent -StartLine $d.start -MaxLines 200
-                if ($snippet) {
-                    $richSnippets += [pscustomobject]@{
-                        path  = $f.path
-                        label = $d.name
-                        start = $d.start
-                        code  = $snippet
+            # Fetch code snippets for those changed symbols (client-side slicing first)
+            if ($defs -and $defs.Count) {
+                foreach ($d in $defs) {
+                    $source = 'client-slice'
+
+                    # 1) Prefer client-side slicing from HEAD content by symbol range
+                    $slice = Get-RepoSnippet -Owner $owner -Repo $repo -Path $f.path -RefSha $headRef -Range $d.range -PadBefore 6 -PadAfter 4 -MaxBytes 8192
+
+                    # 2) Optional fallback via Serena (if available)
+                    if (-not $slice -and $EnableSerena -and $SerenaUrl) {
+                        $maybe = Get-SerenaSymbolContent -NamePath $d.name_path -RelPath $relProjectPath
+                        if ($maybe -and $maybe.text) {
+                            $slice = [pscustomobject]@{
+                                text           = $maybe.text
+                                start          = $d.range.start
+                                end            = $d.range.end
+                                original_range = $d.range
+                            }
+                            $source = 'serena'
+                        }
+                    }
+
+                    if ($slice -and $slice.text) {
+                        $key = "$($f.path)#$($d.name_path)"
+                        $serenaIndex.snippets[$key] = @{
+                            type   = $d.type
+                            range  = $d.range
+                            bytes  = ([Text.Encoding]::UTF8.GetByteCount($slice.text))
+                            from   = $source
+                        }
+                        $ctxFiles += [pscustomobject]@{
+                            path    = "Serena/Snippets/$($f.path)#$($d.name_path).al"
+                            content = $slice.text
+                        }
+                        Write-Host ("    └─ snippet: {0} ({1}, len={2})" -f $d.name_path, $source, $slice.text.Length)
                     }
                 }
             }
 
-            # Where-used per changed symbol (trimmed)
-            if ($EnableSerena -and $SerenaUrl -and $defs) {
+
+            # Where-used per changed symbol (trimmed), now that $defs is defined
+            if ($EnableSerena -and $SerenaUrl -and $defs -and $defs.Count) {
                 foreach ($d in $defs) {
-                    $symHit   = Find-SerenaSymbol -NamePath $d.name -RelPath $relProjectPath -Depth $SerenaSymbolDepth
-                    $namePath = if ($symHit -and $symHit[0] -and $symHit[0].name_path) { $symHit[0].name_path } else { $d.name }
+                    $symHit   = Find-SerenaSymbol -NamePath $d.name_path -RelPath $relProjectPath -Depth $SerenaSymbolDepth
+                    $namePath = if ($symHit -and $symHit[0] -and $symHit[0].name_path) { $symHit[0].name_path } else { $d.name_path }
                     $refs     = Get-SerenaReferences -NamePath $namePath -RelPath $relProjectPath -Max $SerenaMaxRefs
                     if ($refs -and $refs.Count) {
-                        $key = "$($f.path)#$($d.name)"   # keep repo-relative keys for the model
+                        $key = "$($f.path)#$namePath"
                         $serenaIndex.whereUsed[$key] = $refs
                         $ctxFiles += [pscustomobject]@{
                             path    = "Serena/WhereUsed/$key.json"
                             content = ($refs | ConvertTo-Json -Depth 10)
                         }
-                        Write-Host "    └─ where-used: $($d.name) ($($refs.Count))"
+                        Write-Host "    └─ where-used: $namePath ($($refs.Count))"
                     }
                 }
             }
@@ -1448,8 +1552,7 @@ $ProjectContext
 $rubric
 
 <additional_inputs>
-  - bcObjects: metadata; use for reasoning only.
-  - richSnippets: extended AL blocks; do not quote verbatim.
+ - serena: serena MCP symbols and code snippets (metadata); use for reasoning only, do not quote verbatim.
 </additional_inputs>
 
 <reasoning_effort>$ReasoningEffort</reasoning_effort>
@@ -1513,8 +1616,6 @@ $BasePromptExtra
             contextFiles = $ctxFiles
             pullRequest  = $pullObj
             issues       = $issueCtx
-            bcObjects    = $bcObjects
-            richSnippets = $richSnippets
             serena       = $serenaIndex
             context      = @{
             repository     = $env:GITHUB_REPOSITORY
