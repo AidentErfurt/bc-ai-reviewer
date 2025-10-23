@@ -39,7 +39,6 @@ The action fetches the PR diff, optional context files, and any referenced issue
 | `GUIDELINE_RULES_PATH`    | no                                                 | `""`                         | Path to a JSON or PSD1 file defining **custom AL-Guideline rules**.                           |
 | `DISABLE_GUIDELINEDOCS`   | no                                                 | `false`                      | Skip downloading the official Microsoft *AL Guidelines* docs.                                 |
 | `INCLUDE_CHANGED_FILES_AS_CONTEXT`   | no                                                 | `false`                      | Ship every file that is touched by the PR to the LLM as an extra context file.                                 |
-| `PROMPT_STYLE`            | no                                                 | `auto`                      | `auto` = GPT-5 prompt when `AI_MODEL` matches `gpt-5*` (OpenAI **or** Azure); `gpt5` forces it; `generic` disables it.      |
 | `REASONING_EFFORT`        | no                                                 | `medium`                    | Hint for GPT-5 reasoning depth: `low` \| `medium` \| `high` (ignored by other models).                                       |
 | `LOG_PROMPT`        | no                                                 | `false`                    | Log full prompt (diff + context) to runner logs.                                       |
 | `ENABLE_SERENA`            | no  | `false` | Enable Serena MCP enrichment (symbols, where-used, rich snippets). |

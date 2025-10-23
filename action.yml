@@ -123,10 +123,6 @@ inputs:
     description: "Ship every file that is touched by the PR to the LLM as an extra context file"
     type: boolean
     default: false
-  PROMPT_STYLE:
-    description: "auto | gpt5 | generic"
-    type: string
-    default: "auto"
   REASONING_EFFORT:
     description: "low | medium | high"
     type: string
@@ -221,7 +217,6 @@ runs:
           GuidelineRulesPath = '${{ inputs.GUIDELINE_RULES_PATH }}'
           DisableGuidelineDocs    = [switch]::new([bool]::Parse('${{ inputs.DISABLE_GUIDELINEDOCS }}'))
           IncludeChangedFilesAsContext = [bool]::Parse('${{ inputs.INCLUDE_CHANGED_FILES_AS_CONTEXT }}')
-          PromptStyle        = '${{ inputs.PROMPT_STYLE }}'
           ReasoningEffort    = '${{ inputs.REASONING_EFFORT }}'
           LogPrompt          = [switch]::new([bool]::Parse('${{ inputs.LOG_PROMPT }}'))
           EnableSerena       = [bool]::Parse('${{ inputs.ENABLE_SERENA }}')

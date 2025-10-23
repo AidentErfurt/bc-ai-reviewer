@@ -128,7 +128,14 @@ if ($toolNames -contains 'activate_project') {
   Write-Host "'activate_project' tool not available; skipping activation."
 }
 
-# Nice step summary (if supported by runner)
+# Build compact Markdown list of first 40 tools (serena has 27 atm)
+$bt = [char]96  # literal `
+$toolsListMd = (
+  $toolNames | Select-Object -First 40 |
+    ForEach-Object { "- $bt$($_)$bt" }
+) -join "`n"
+
+# Nice step summary
 if ($env:GITHUB_STEP_SUMMARY) {
   @"
 ### Serena MCP Handshake
@@ -140,11 +147,7 @@ if ($env:GITHUB_STEP_SUMMARY) {
 
 <details><summary>First tools</summary>
 
-$(
-  $toolNames | Select-Object -First 20 |
-    ForEach-Object { "- ``$($_)``" } |
-    Join-String -Separator "`n"
-)
+$toolsListMd
 
 </details>
 "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

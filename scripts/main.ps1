@@ -16,112 +16,174 @@ limitations under the License.
 
 <#
 .SYNOPSIS
-    Run an AI-powered code review on a GitHub pull request using OpenAI or Azure OpenAI.
+Runs an AI-powered code review on a GitHub Pull Request using OpenAI, Azure OpenAI, or OpenRouter.
 
 .DESCRIPTION
-    Connects to GitHub REST & GraphQL APIs to fetch PR diffs, context files, and linked issues;
-    invokes OpenAI/Azure for an AI review; then posts comments or approves the PR.
+- Fetches the PR’s incremental diff (between last bot-reviewed commit or base SHA and the current head), 
+  plus optional context files and linked issues (REST + GraphQL).
+- Sends a numbered diff and compact context to the selected AI provider to generate JSON output 
+  (summary + inline comments + suggested action).
+- Posts a single PR review with inline comments (when positions are valid) or falls back to a summary-only review.
 
 .PARAMETER GitHubToken
-    Personal Access Token with repo scope.
+GitHub token with repo scope. Used for REST and GraphQL calls and to post the PR review.
 
 .PARAMETER Provider
-    AI provider: 'openai' or 'azure'. Default 'azure'.
+AI provider to call. One of: 'openai', 'azure', 'openrouter'. Default: 'azure'.
 
 .PARAMETER Model
-    AI_MODEL is the base model. For Azure, set AZURE_DEPLOYMENT to your deployment’s friendly name (falls back to AI_MODEL if omitted. Default 'o3-mini'.
+Base model name (e.g., 'o3-mini'). 
+- OpenAI/OpenRouter: sent as the model in the request.
+- Azure: set -AzureDeployment to your deployment’s friendly name; if omitted, the deployment name falls back to -Model.
+Default: 'o3-mini'.
 
+.PARAMETER ReasoningEffort
+Reasoning effort hint for reasoning models ('low'|'medium'|'high'). Used with the Responses API when applicable.
+Default: 'medium'.
+
+# OpenAI / OpenRouter
 .PARAMETER ApiKey
-    OPENAI_API_KEY (required when Provider is 'openai').
-
-.PARAMETER AzureEndpoint
-    Azure OpenAI endpoint URL (required when Provider is 'azure').
-
-.PARAMETER AzureApiKey
-    Azure OpenAI API key (required when Provider is 'azure').
-
-.PARAMETER AzureApiVersion
-    Azure OpenAI API version. Default '2025-01-01-preview'.
-
-.PARAMETER AzureDeployment
-    Azure OpenAI deployment name (friendly name you created in Azure).
-
-.PARAMETER ApproveReviews
-    Switch. Approve or request changes instead of only commenting.
-
-.PARAMETER MaxComments
-    Maximum inline comments to post (0 = unlimited). Default 0.
-
-.PARAMETER ProjectContext
-    Free-form architecture or guidelines.
-
-.PARAMETER ContextFiles
-    Comma-separated list of file globs to always fetch.
-
-.PARAMETER IncludePatterns
-    Comma-separated glob patterns of files to include in diff. Default '**/*.al,**/*.xlf,**/*.json'.
-
-.PARAMETER ExcludePatterns
-    Comma-separated glob patterns to exclude. Default ''.
-
-.PARAMETER IssueCount
-    Max number of linked issues to fetch (0 = all). Default 0.
-
-.PARAMETER FetchClosedIssues
-    Switch. Include closed issues in context.
+API key for OpenAI or OpenRouter. Required if -Provider is 'openai' or 'openrouter'.
 
 .PARAMETER OpenRouterReferer
-    Optional OpenRouter marketing headers.
+Optional HTTP Referer header value for OpenRouter analytics/attribution.
 
 .PARAMETER OpenRouterTitle
-    Optional OpenRouter marketing headers.
+Optional X-Title header value for OpenRouter.
 
+# Azure OpenAI
+.PARAMETER AzureEndpoint
+Azure OpenAI endpoint, e.g. 'https://{resource-name}.openai.azure.com'. Required when -Provider 'azure'.
+
+.PARAMETER AzureApiKey
+Azure OpenAI API key. Required when -Provider 'azure'.
+
+.PARAMETER AzureApiVersion
+Azure OpenAI API version string. Default: '2025-01-01-preview'.
+
+.PARAMETER AzureDeployment
+Azure OpenAI deployment friendly name. If omitted, falls back to -Model as the deployment path segment.
+
+# Review behavior
+.PARAMETER ApproveReviews
+If set, the review event mirrors the AI’s "suggestedAction" as APPROVE or REQUEST_CHANGES.
+If not set, the review is posted as a COMMENT regardless of suggestions.
+
+.PARAMETER MaxComments
+Maximum number of inline comments to post. Use 0 for “no limit”.
+Default: 10.
+
+# Context & scoping
+.PARAMETER ProjectContext
+Free-form architectural notes or team guidelines to include in the prompt.
+
+.PARAMETER ContextFiles
+Comma-separated list of file globs (repo-relative) to always fetch and include as context (e.g. 'README.md,docs/*.md').
+
+.PARAMETER IncludePatterns
+Comma-separated glob patterns to include from the diff (matching file paths). 
+Default: '**/*.al,**/*.xlf,**/*.json'.
+
+.PARAMETER ExcludePatterns
+Comma-separated glob patterns to exclude from the diff selection. Default: ''.
+
+.PARAMETER IssueCount
+Maximum number of linked issues (from PR body references and closingIssuesReferences) to include as context.
+0 = include all found. Default: 0.
+
+.PARAMETER FetchClosedIssues
+If set, include closed issues in context; otherwise closed issues are skipped.
+
+# App autodetect (Business Central)
 .PARAMETER AutoDetectApps
-    Auto-include app.json files as context.
+If true, detects app.json files for touched files and includes per-app context.
 
 .PARAMETER IncludeAppPermissions
-     Auto-include permissionsets and entitlements as context. Only honoured if AutoDetectApps is on.
+When -AutoDetectApps is true, auto-include '*.PermissionSet.al' and '*.Entitlement.al' for each detected app. Default: $true.
 
 .PARAMETER IncludeAppMarkdown
-    Auto-include markdown files as context. Only honoured if AutoDetectApps is on.
+When -AutoDetectApps is true, auto-include '*.md' docs under each detected app. Default: $true.
 
+# Guidelines & prompt add-ons
 .PARAMETER BasePromptExtra
-    Free-form text injected into the system prompt.
+Additional free-form text appended to the base system prompt.
 
 .PARAMETER GuidelineRulesPath
-    Optional path to a JSON or PSD1 file defining custom AL‐Guideline rules.
+Path to a JSON or PSD1 rules file to seed AL-Guidelines patterns. If omitted, rules are autodiscovered from the public repo.
 
 .PARAMETER DisableGuidelineDocs
-    Switch. Skip fetching AL-Guidelines docs.
+Skip fetching guideline markdown docs (still uses pattern hits if available).
 
+# Context shaping & logging
 .PARAMETER IncludeChangedFilesAsContext
-    Ship every file that is touched by the PR to the LLM as an extra context file.
+If true, also upload the HEAD versions of PR-touched files as read-only context (size-capped).
 
 .PARAMETER LogPrompt
-    Log full prompt (diff + context) to runner logs.
+If set, logs a truncated JSON view of the final message payload for troubleshooting.
+
+# Serena MCP (optional enrichment)
+.PARAMETER EnableSerena
+Enable Serena MCP enrichment (symbols overview and where-used queries).
+
+.PARAMETER SerenaUrl
+Serena MCP endpoint (if not supplied, uses SERENA_URL env var when present).
+
+.PARAMETER SerenaTimeoutSec
+Timeout (seconds) for each Serena call. Default: 20.
+
+.PARAMETER SerenaMaxRefs
+Maximum cross-references to include per symbol for where-used lookups. Default: 50.
+
+.PARAMETER SerenaSymbolDepth
+Depth for symbol search within file/solution. Default: 1.
 
 .EXAMPLE
-    .\main.ps1 -GitHubToken $env:GITHUB_TOKEN -Provider azure -AzureEndpoint 'https://...' -ContextFiles 'README.md,docs/*.md'
+# Azure OpenAI with autodetected apps and extra docs
+.\main.ps1 `
+  -GitHubToken $env:GITHUB_TOKEN `
+  -Provider azure `
+  -AzureEndpoint 'https://my-aoai.openai.azure.com' `
+  -AzureApiKey $env:AZURE_OPENAI_KEY `
+  -AzureDeployment 'bc-reviewer-o3' `
+  -AutoDetectApps $true -IncludeAppPermissions $true -IncludeAppMarkdown $true `
+  -ContextFiles 'README.md,docs/*.md' `
+  -MaxComments 20
+
+.EXAMPLE
+# OpenAI Responses API style when model name suggests it
+.\main.ps1 `
+  -GitHubToken $env:GITHUB_TOKEN `
+  -Provider openai `
+  -ApiKey $env:OPENAI_API_KEY `
+  -Model 'o3-mini' `
+  -IncludePatterns '**/*.al,**/*.json' `
+  -ExcludePatterns '**/rdlc/**'
+
+.EXAMPLE
+# OpenRouter
+.\main.ps1 `
+  -GitHubToken $env:GITHUB_TOKEN `
+  -Provider openrouter `
+  -ApiKey $env:OPENROUTER_API_KEY `
+  -Model 'openrouter/anthropic/claude-3.7' `
+  -OpenRouterReferer 'https://example.com' -OpenRouterTitle 'BC Reviewer'
 
 .INPUTS
-    None. All parameters.
+None. All parameters are passed by name.
 
 .OUTPUTS
-    None.
+None. Posts a PR review via the GitHub API.
 #>
+
 function Invoke-AICodeReview {
     [CmdletBinding(DefaultParameterSetName = 'Azure')]
     param(
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$GitHubToken,
 
         [ValidateSet('openai','azure','openrouter')]
-        [string]$Provider = 'openai',
+        [string]$Provider = 'azure',
 
         [string]$Model       = 'o3-mini',
-
-        # Prompt/policy tuning
-        [ValidateSet('auto','gpt5','generic')]
-        [string] $PromptStyle = 'auto',
 
         [ValidateSet('low','medium','high')]
         [string] $ReasoningEffort = 'medium',
@@ -213,7 +275,7 @@ Begin {
         param([array]$Messages)
 
         # Heuristics: when to prefer the Responses API
-        $isReasoningish = ($Model -match '^(?i)(o\d|gpt-?5)') -or ($PromptStyle -eq 'gpt5')
+        $isReasoningish = ($Model -match '^(?i)(o\d|gpt-?5)')
 
         # Build primary + fallback endpoints/headers/body per provider
         switch ($Provider) {
@@ -628,252 +690,39 @@ closingIssuesReferences(first: 50) {
     }
 
     ############################################################################
-    # Helper: Create prompt
-    ############################################################################
-    function Test-IsGpt5Prompt {
-        param([string]$Model,[string]$PromptStyle)
-        switch ($PromptStyle) {
-            'gpt5'    { return $true }
-            'generic' { return $false }
-            default   { return ($Model -match '^(?i)gpt-?5') }  # auto: infer from model/deployment name when possible
-        }
-    }
-
-    function New-BasePrompt {
-        param(
-            [int]    $MaxInline,
-            [string] $ProjectContext,
-            [string] $BasePromptExtra,
-            [bool]   $IsUpdate,
-            [bool]   $UseGpt5,
-            [string] $ReasoningEffort
-        )
-
-        # Shared review rubric (compact, reviewer-centric; not a code-gen spec)
-$rubric = @"
-<review_rubric>
-  <quality_gates>
-    - AL analyzers enabled (CodeCop, UICop, AppSourceCop; PerTenantExtensionCop for PTEs) and important diagnostics addressed.
-    - DataClassification set (avoid ToBeClassified) when adding/altering table fields.
-    - ObsoleteState/ObsoleteTag used when deprecating symbols; avoid deprecated APIs.
-    - New objects covered by PermissionSet/Entitlement with least privilege.
-  </quality_gates>
-  <performance>
-    - Prefer set-based ops: FindSet + repeat...until Next() = 0 over FindFirst in loops.
-    - Avoid IsEmpty() before FindSet() unless justified.
-    - Use SetLoadFields/partial records when iterating or reading few fields.
-    - Be cautious with COMMIT; keep transactions small. Consider CommitBehavior in sensitive flows.
-  </performance>
-  <ui_text_and_tooltips>
-    - Pages/Reports: include ApplicationArea and UsageCategory so objects appear in Search.
-    - ToolTips: present and concise; field ToolTips start with "Specifies ...".
-    - Use Labels for user-facing strings (Message/Error/Confirm); avoid hardcoded literals.
-  </ui_text_and_patterns>
-  <architecture_and_style>
-    - Prefer Enums (extensible) over Options for new work; use interfaces for pluggable logic.
-    - Encapsulate internals (Access = Internal; use façades/public contracts).
-    - Follow MS naming/formatting; keep procedures cohesive and single-purpose.
-    - Prefer events (publish/subscribe) over modifying base logic.
-  </architecture_and_style>
-  <testing_and_tooling>
-    - Add small test codeunits for critical logic; use TransactionModel appropriately.
-    - Add telemetry/logging where it helps supportability (no personal data).
-  </testing_and_tooling>
-  <review_etiquette>
-    - Only claim issues you can see in the diff or context; if something is likely but not shown, add it to the summary as a suggestion and lower confidence.
-    - Don’t ask the human to clarify mid-review. If you assume something, note it under “Assumptions” in the summary.
-    - Keep inlines ≤ 3 lines; aggregate overflow in the summary.
-  </review_etiquette>
-</review_rubric>
-"@
-
-    if ($UseGpt5) {
-@"
-<code_review_task>
-  <role>AI reviewer for Microsoft Dynamics 365 Business Central repositories.</role>
-  <objectives>
-    - Assess code quality & AL best practices
-    - Find bugs / edge cases / locking or concurrency risks
-    - Call out performance concerns (filters, keys, FlowFields)
-    - Judge readability & maintainability
-    - Surface security gaps (permissions/entitlements)
-  </objectives>
-</code_review_task>
-
-<project_context>
-$ProjectContext
-</project_context>
-
-<guidance>
-  - Provide up to $MaxInline concise inline comments; aggregate overflow in the summary.
-  - If nothing needs improvement, set "comments": [].
-  - Use GitHub-flavoured Markdown only inside "comment" fields; plain text elsewhere.
-  - Do not rely on contextFiles for inline comments.
-  - Inline comments must reference a {path,line} present in the numbered diff and the validLines table.
-</guidance>
-
-$rubric
-
-<additional_inputs>
-  - bcObjects: metadata; use for reasoning only.
-  - richSnippets: extended AL blocks; do not quote verbatim.
-</additional_inputs>
-
-<reasoning_effort>$ReasoningEffort</reasoning_effort>
-
-<output_contract>
-  Respond with a single JSON object (no code fences) using exactly:
-  {
-    "summary"        : "<overall feedback - max 10 lines>",
-    "comments"       : [ { "path": "string", "line": number, "comment": "string (≤ 3 lines)" } ],
-    "suggestedAction": "approve" | "request_changes" | "comment",
-    "confidence"     : 0-1
-  }
-  Escape JSON strings (quotes, backslashes) correctly.
-</output_contract>
-
-<notes>
-$(
-    if ($IsUpdate) { 'Previous feedback already addressed can be omitted; focus on new changes.' } else { '' }
-)
-</notes>
-
-<extra>
-$BasePromptExtra
-</extra>
-"@
-    }
-    else {
-@"
-You are reviewing AL code for Microsoft Dynamics 365 Business Central.
-Your tasks:
-1. Assess code quality & AL best-practice adherence
-2. Detect potential bugs, edge cases, record-locking or concurrency issues
-3. Highlight performance considerations (filters, keys, FlowFields, etc.)
-4. Judge readability & maintainability
-5. Surface security concerns, especially permission/entitlement coverage
-
-$BasePromptExtra
-
-**Review rubric (apply to what’s visible in the diff/context):**
-$rubric
-
-**When you answer:**
-* Provide **up to $MaxInline** concise inline comments; aggregate any extra in the summary.
-* If nothing needs improvement, set `"comments": []`.
-* Output GitHub-flavoured Markdown **inside** `"comment"` fields **only**; plain text elsewhere.
-* Respond **only** with a single JSON object (no fences), escaping strings correctly.
-$(
-    if ($IsUpdate) { "`nPrevious feedback already addressed can be omitted; focus on new changes." } else { "" }
-)
-
-Respond **only** with:
-{
-"summary"        : "<overall feedback - max 10 lines>",
-"comments"       : [ { "path": "string", "line": number, "comment": "string (≤ 3 lines)" } ],
-"suggestedAction": "approve" | "request_changes" | "comment",
-"confidence"     : 0-1
-}
-"@
-    }
-}
-
-
-    ############################################################################
-    # Helper: Responses extraction
-    ############################################################################
-    function Get-AssistantText {
-        param($resp)
-
-        # Chat Completions
-        if ($resp.PSObject.Properties.Name -contains 'choices' -and $resp.choices) {
-            return $resp.choices[0].message.content
-        }
-
-        # Responses API (several shapes)
-        if ($resp.PSObject.Properties.Name -contains 'output') {
-            $texts = @()
-            foreach ($o in @($resp.output)) {
-                if ($o.type -eq 'message' -and $o.content) {
-                    foreach ($c in @($o.content)) {
-                        if ($c.type -in @('text','output_text') -and $c.text) { $texts += $c.text }
-                    }
-                }
-            }
-            if ($texts.Count) { return ($texts -join "`n") }
-        }
-
-        # Some SDKs expose top-level
-        if ($resp.PSObject.Properties.Name -contains 'output_text' -and $resp.output_text) {
-            return $resp.output_text
-        }
-        return $null
-    }
-
-    ############################################################################
     # Helper: call Serena MCP (Streamable HTTP) tools
     ############################################################################
-    function Invoke-SerenaTool {
-        param(
-            [Parameter(Mandatory)][string]$ToolName,
-            [hashtable]$Arguments = @{}
-        )
-        if (-not $EnableSerena -or [string]::IsNullOrWhiteSpace($SerenaUrl)) {
-            return $null
-        }
-        try {
-            $body = @{
-                jsonrpc = '2.0'
-                id      = [guid]::NewGuid().ToString()
-                method  = 'tools/call'
-                params  = @{ name = $ToolName; arguments = $Arguments }
-            }
-            $hdr = @{ 'Content-Type' = 'application/json' }
-            $resp = Invoke-RestMethod -Method POST -Uri $SerenaUrl -Headers $hdr `
-                    -Body ($body | ConvertTo-Json -Depth 10) -TimeoutSec $SerenaTimeoutSec
 
-            # Serena commonly returns {"result":{...}} or direct payload; accept both
-            if ($resp.PSObject.Properties['result']) { return $resp.result }
-            return $resp
-        }
-        catch {
-            Write-Warning "Serena tool '$ToolName' failed: $($_.Exception.Message)"
-            return $null
-        }
+    # Thin wrapper so the rest of the script does not care about headers
+    function Serena-Call([string]$Tool,[hashtable]$Args=@{}) {
+        if (-not $EnableSerena -or [string]::IsNullOrWhiteSpace($SerenaUrl)) { return $null }
+        Invoke-SerenaTool `
+            -Url $SerenaUrl `
+            -SessionId $SerenaSessionId `
+            -SessionHdrName $SerenaSessionHdr `
+            -Name $Tool `
+            -ToolArgs $Args `
+            -TimeoutSec $SerenaTimeoutSec
     }
 
     # Symbols:
     # get_symbols_overview gives a compact per-file map of procedures/triggers etc., 
     # which the model can use to anchor comments to the right places even when the diff is sparse.
-    function Get-SerenaSymbolsOverview {
-        param([string]$RelPath)
-        Invoke-SerenaTool -ToolName 'get_symbols_overview' -Arguments @{ relative_path = $RelPath }
+    function Get-SerenaSymbolsOverview([string]$RelPath) {
+        Serena-Call 'get_symbols_overview' @{ relative_path = $RelPath }
     }
 
     # Where-used: 
     # find_symbol -> find_referencing_symbols yields cross-refs for touched procedures/triggers, 
     # helping the reviewer flag knock-on effects and missing permission/entitlement updates without shipping entire files.
-    function Find-SerenaSymbol {
-        param(
-            [string]$NamePath,
-            [string]$RelPath,
-            [int]$Depth = 1
-        )
-        Invoke-SerenaTool -ToolName 'find_symbol' -Arguments @{
-            name_path            = $NamePath
-            within_relative_path = $RelPath
-            depth                = $Depth
-        }
+    function Find-SerenaSymbol([string]$NamePath,[string]$RelPath,[int]$Depth=1) {
+        Serena-Call 'find_symbol' @{ name_path = $NamePath; within_relative_path = $RelPath; depth = $Depth }
     }
 
-    function Get-SerenaReferences {
-        param(
-            [string]$NamePath,
-            [int]$Max = 50
-        )
-        $res = Invoke-SerenaTool -ToolName 'find_referencing_symbols' -Arguments @{ name_path = $NamePath }
-        $arr = @($res)                 # normalize
-        if ($null -eq $arr -or $arr.Count -eq 0) { return @() }
+    function Get-SerenaReferences([string]$NamePath,[int]$Max=50) {
+        $res = Serena-Call 'find_referencing_symbols' @{ name_path = $NamePath }
+        $arr = @($res)
+        if (-not $arr -or -not $arr.Count) { return @() }
         return $arr | Select-Object -First ([math]::Min($Max, $arr.Count))
     }
 
@@ -937,6 +786,14 @@ Respond **only** with:
     ############################################################################
     # Begin block: parameter validation, splitting globs, strict mode...
     ############################################################################
+
+    # Serena integration
+    . (Join-Path $PSScriptRoot 'serena-common.ps1')
+
+    # Pull URL + session header negotiated during serena-handshake.ps1
+    if ($EnableSerena -and -not $SerenaUrl -and $env:SERENA_URL) { $SerenaUrl = $env:SERENA_URL }
+    $SerenaSessionId  = $env:SERENA_SESSION_ID
+    $SerenaSessionHdr = if ($env:SERENA_SESSION_HDR) { $env:SERENA_SESSION_HDR } else { 'Mcp-Session-Id' }
 
     $ErrorActionPreference = 'Stop'
     Write-Host "Repository: $env:GITHUB_REPOSITORY  Provider: $Provider"
@@ -1116,7 +973,7 @@ Process {
         return
     }
 
-    # Cap to avoid GitHub’s 1000 inline-comment limit
+    # Cap to avoid GitHub's 1000 inline-comment limit
     $maxFiles = 300
     if ($relevant.Count -gt $maxFiles) {
         Write-Warning (
@@ -1160,31 +1017,38 @@ Process {
         Write-Host "::endgroup::"
     }
 
-    $ctxBytes = ($ctxFiles | ForEach-Object { $_.content.Length } | Measure-Object -Sum).Sum
+    # Cap context payload (~700 KB). Remove largest files first.
     $maxCtxBytes = 700KB
+    $ctxBytes = ($ctxFiles | ForEach-Object {
+        [System.Text.Encoding]::UTF8.GetByteCount($_.content)
+    } | Measure-Object -Sum).Sum
+
     if ($ctxBytes -gt $maxCtxBytes) {
+        # sort by size DESC so we drop the biggest until under budget
         $ctxFiles = $ctxFiles | Sort-Object { $_.content.Length } -Descending
-        while ($ctxBytes -gt $maxCtxBytes -and $ctxFiles.Count) {
-            $ctxBytes -= $ctxFiles[-1].content.Length
-            $ctxFiles  = $ctxFiles[0..($ctxFiles.Count-2)]
+        while ($ctxBytes -gt $maxCtxBytes -and $ctxFiles.Count -gt 0) {
+            $ctxBytes -= $ctxFiles[0].content.Length
+            $ctxFiles = $ctxFiles[1..($ctxFiles.Count-1)]
         }
     }
 
     ############################################################################
     # 4c. Serena enrichment (optional): symbols, where-used, rich snippets
     ############################################################################
+    $serenaIndex = @{ symbols = @{}; whereUsed = @{} }  # path -> overview, "path#symbol" -> refs[]
+
     $bcObjects    = @()
     $richSnippets = @()
 
-    if ($EnableSerena) {
-        Write-Host "::group::Serena enrichment"
-    }
+    if ($EnableSerena) { Write-Host "::group::Serena enrichment" }
 
     foreach ($f in $relevant | Where-Object { $_.path -like '*.al' }) {
+
+        # Load HEAD file content once (for bcObjects / defs / rich snippets)
         $headContent = Get-FileContent -Owner $owner -Repo $repo -Path $f.path -RefSha $headRef
         if (-not $headContent) { continue }
 
-        # Top-level object (fallback parsing)
+        # Top-level object metadata (lightweight, useful signal)
         $obj = Get-AlTopLevelObject -Text $headContent
         if ($obj) {
             $bcObjects += [pscustomobject]@{
@@ -1195,44 +1059,50 @@ Process {
             }
         }
 
-        # Serena: get symbol overview for the file
+        # Symbol overview per file (Serena)
         if ($EnableSerena) {
             $sym = Get-SerenaSymbolsOverview -RelPath $f.path
             if ($sym) {
+                # ship as artifact...
                 $ctxFiles += [pscustomobject]@{
                     path    = "Serena/Symbols/$($f.path).json"
                     content = ($sym | ConvertTo-Json -Depth 10)
                 }
+                # ...and in-memory (token-light)
+                $serenaIndex.symbols[$f.path] = $sym
                 Write-Host "  + symbols: $($f.path)"
             }
         }
 
-        # Determine changed symbol defs near touched lines
-        $touched = @()
-        if ($validLines.ContainsKey($f.path)) { $touched = @($validLines[$f.path]) }
-        $defs = Get-AlChangedSymbols -Text $headContent -TouchedLines $touched
+        # Determine changed symbol defs near touched lines (for rich snippets + where-used)
+        $touched = if ($validLines.ContainsKey($f.path)) { @($validLines[$f.path]) } else { @() }
+        $defs    = Get-AlChangedSymbols -Text $headContent -TouchedLines $touched
 
+        # Add rich snippets (~200 lines around each changed def)
         foreach ($d in $defs) {
-            # Rich snippet: grab a reasonable block around definition start
             $snippet = Get-BlockSnippetAround -Text $headContent -StartLine $d.start -MaxLines 200
             if ($snippet) {
                 $richSnippets += [pscustomobject]@{
-                    path   = $f.path
-                    label  = $d.name
-                    start  = $d.start
-                    code   = $snippet
+                    path  = $f.path
+                    label = $d.name
+                    start = $d.start
+                    code  = $snippet
                 }
             }
+        }
 
-            # Serena where-used
-            if ($EnableSerena) {
-                $symHit = Find-SerenaSymbol -NamePath $d.name -RelPath $f.path -Depth $SerenaSymbolDepth
-                # Prefer fully qualified name_path from Serena when available
+        # Where-used per changed symbol (trimmed)
+        if ($EnableSerena -and $defs) {
+            foreach ($d in $defs) {
+                $symHit   = Find-SerenaSymbol -NamePath $d.name -RelPath $f.path -Depth $SerenaSymbolDepth
                 $namePath = if ($symHit -and $symHit[0] -and $symHit[0].name_path) { $symHit[0].name_path } else { $d.name }
-                $refs = Get-SerenaReferences -NamePath $namePath -Max $SerenaMaxRefs
+                $refs     = Get-SerenaReferences -NamePath $namePath -Max $SerenaMaxRefs
                 if ($refs -and $refs.Count) {
+                    $key = "$($f.path)#$($d.name)"
+                    $serenaIndex.whereUsed[$key] = $refs
+                    # also keep file artifact
                     $ctxFiles += [pscustomobject]@{
-                        path    = "Serena/WhereUsed/$($f.path)#$($d.name).json"
+                        path    = "Serena/WhereUsed/$key.json"
                         content = ($refs | ConvertTo-Json -Depth 10)
                     }
                     Write-Host "    └─ where-used: $($d.name) ($($refs.Count))"
@@ -1241,9 +1111,8 @@ Process {
         }
     }
 
-    if ($EnableSerena) {
-        Write-Host "::endgroup::"
-    }
+    if ($EnableSerena) { Write-Host "::endgroup::" }
+
 
     ###########################################################################
     # 5. Autodetect app context
@@ -1457,68 +1326,100 @@ Process {
     ############################################################################
     $maxInline = if ($MaxComments -gt 0) { $MaxComments } else { 1000 }
 
-    $basePrompt = @"
-You are reviewing AL code for Microsoft Dynamics 365 Business Central.
-Your tasks:
-1. Assess code quality & AL best-practice adherence
-2. Detect potential bugs, edge cases, record-locking or concurrency issues
-3. Highlight performance considerations (filters, keys, FlowFields, etc.)
-4. Judge readability & maintainability
-5. Surface security concerns, especially permission/entitlement coverage
+$IsUpdate = [bool]$lastCommit
 
-Suggest improvements and explain your reasoning for each suggestion.
-
-$BasePromptExtra
-
-**When you answer:**
-* Open with one or two sentences that **acknowledge what looks good** (clarity, structure, test coverage, etc.).
-* Provide **up to $maxInline concise inline comments** if you spot something worth improving. If more issues exist, aggregate the remainder in summary.
-* if nothing needs improvement, set `"comments": []`.
-* Output GitHub-flavoured Markdown **inside** `"comment"` fields **only**; everywhere else use plain text.
-* You must output **only** a single JSON object (no surrounding text, no code fences).
-* Escape all JSON strings (quotes, backslashes) so the output parses cleanly.
-
-**Do not add inline comments for anything you see only in `contextFiles`.**
-Inline `comments` **must** reference a `path` & `line` that exists in the
-numbered `files` diff above (see {path,line} pair that exists in the
-  `validLines` table provided in the request). Anything you see in contextFiles is read-only reference.
-Comments that don't match will be ignored.
-
-Focus exclusively on the code: naming, performance, events/trigger usage, filters,
-record locking, permission/entitlement changes, UI strings (tone & BC terminology).
-
-If a new AL object is introduced without a corresponding *.PermissionSet.al or *.Entitlement.al file:- add one inline comment per object and mention it in summary.
-
-Additional fields you receive:
-
-* **bcObjects**   - array of object metadata (type, id, name, sourceTable).
-* **richSnippets** - extended AL code blocks surrounding the changes.
-Use them for reasoning, don't quote them verbatim in comments.
-
-Respond **only** with a JSON object using **exactly** these keys:
-
-{
-"summary"        : "<overall feedback - max 10 lines>",
-"comments"       : [ { "path": "string", "line": number, "comment": "string (≤ 3 lines)" } ],
-"suggestedAction": "approve" | "request_changes" | "comment",
-"confidence"     : 0-1
-}
-
-Set "confidence" between 0 (no certainty) and 1 (absolute certainty).
-
-Example of an empty-but-valid result:
-
-{
-"summary": "Looks good - no issues found.",
-"comments": [],
-"suggestedAction": "approve",
-"confidence": 0.95
-}
+$rubric = @"
+<review_rubric>
+  <quality_gates>
+    - AL analyzers enabled (CodeCop, UICop, AppSourceCop; PerTenantExtensionCop for PTEs) and important diagnostics addressed.
+    - DataClassification set (avoid ToBeClassified) when adding/altering table fields.
+    - ObsoleteState/ObsoleteTag used when deprecating symbols; avoid deprecated APIs.
+    - New objects covered by PermissionSet/Entitlement with least privilege.
+  </quality_gates>
+  <performance>
+    - Prefer set-based ops: FindSet + repeat...until Next() = 0 over FindFirst in loops.
+    - Avoid IsEmpty() before FindSet() unless justified.
+    - Use SetLoadFields/partial records when iterating or reading few fields.
+    - Be cautious with COMMIT; keep transactions small. Consider CommitBehavior in sensitive flows.
+  </performance>
+  <ui_text_and_tooltips>
+    - Pages/Reports: include ApplicationArea and UsageCategory so objects appear in Search.
+    - ToolTips: present and concise; field ToolTips start with "Specifies ...".
+    - Use Labels for user-facing strings (Message/Error/Confirm); avoid hardcoded literals.
+  </ui_text_and_patterns>
+  <architecture_and_style>
+    - Prefer Enums (extensible) over Options for new work; use interfaces for pluggable logic.
+    - Encapsulate internals (Access = Internal; use façades/public contracts).
+    - Follow MS naming/formatting; keep procedures cohesive and single-purpose.
+    - Prefer events (publish/subscribe) over modifying base logic.
+  </architecture_and_style>
+  <testing_and_tooling>
+    - Add small test codeunits for critical logic; use TransactionModel appropriately.
+    - Add telemetry/logging where it helps supportability (no personal data).
+  </testing_and_tooling>
+  <review_etiquette>
+    - Only claim issues you can see in the diff or context; if something is likely but not shown, add it to the summary as a suggestion and lower confidence.
+    - Don't ask the human to clarify mid-review. If you assume something, note it under "Assumptions" in the summary.
+    - Keep inlines ≤ 3 lines; aggregate overflow in the summary.
+  </review_etiquette>
+</review_rubric>
 "@
 
-    if ($lastCommit) {
-        $basePrompt += "`nPrevious feedback already addressed can be omitted; focus on new changes."
-    }
+$basePrompt = @"
+<code_review_task>
+  <role>AI reviewer for Microsoft Dynamics 365 Business Central repositories.</role>
+  <objectives>
+    - Assess code quality & AL best practices
+    - Find bugs / edge cases / locking or concurrency risks
+    - Call out performance concerns (filters, keys, FlowFields)
+    - Judge readability & maintainability
+    - Surface security gaps (permissions/entitlements)
+  </objectives>
+</code_review_task>
+
+<project_context>
+$ProjectContext
+</project_context>
+
+<guidance>
+  - Provide up to $maxInline concise inline comments; aggregate overflow in the summary.
+  - If nothing needs improvement, set "comments": [].
+  - Use GitHub-flavoured Markdown only inside "comment" fields; plain text elsewhere.
+  - Do not rely on contextFiles for inline comments.
+  - Inline comments must reference a {path,line} present in the numbered diff and the validLines table.
+</guidance>
+
+$rubric
+
+<additional_inputs>
+  - bcObjects: metadata; use for reasoning only.
+  - richSnippets: extended AL blocks; do not quote verbatim.
+</additional_inputs>
+
+<reasoning_effort>$ReasoningEffort</reasoning_effort>
+
+<output_contract>
+  Respond with a single JSON object (no code fences) using exactly:
+  {
+    "summary"        : "<overall feedback - max 10 lines>",
+    "comments"       : [ { "path": "string", "line": number, "comment": "string (≤ 3 lines)" } ],
+    "suggestedAction": "approve" | "request_changes" | "comment",
+    "confidence"     : 0-1
+  }
+  Escape JSON strings (quotes, backslashes) correctly.
+</output_contract>
+
+<notes>
+$(
+  if ($IsUpdate) { 'Previous feedback already addressed can be omitted; focus on new changes.' } else { '' }
+)
+</notes>
+
+<extra>
+$BasePromptExtra
+</extra>
+"@
+
 
     $pullObj = @{
         title       = $pr.title
@@ -1558,19 +1459,20 @@ Example of an empty-but-valid result:
             issues       = $issueCtx
             bcObjects    = $bcObjects
             richSnippets = $richSnippets
+            serena       = $serenaIndex
             context      = @{
-                repository     = $env:GITHUB_REPOSITORY
-                projectContext = $ProjectContext
-                isUpdate       = [bool]$lastCommit
+            repository     = $env:GITHUB_REPOSITORY
+            projectContext = $ProjectContext
+            isUpdate       = [bool]$lastCommit
             }
             changeSummary = $pr.title
-        } | ConvertTo-Json -Depth 6
+        } | ConvertTo-Json -Depth 10
         )
     }
     )
 
     if ($LogPrompt) {
-        $promptJson = $messages | ConvertTo-Json -Depth 8
+        $promptJson = $messages | ConvertTo-Json -Depth 10
         if ($promptJson.Length -gt 20000) { $promptJson = $promptJson.Substring(0,20000) + "`n...(truncated)" }
         Write-Host "::group::Final prompt (JSON)"
         Write-Host $promptJson
