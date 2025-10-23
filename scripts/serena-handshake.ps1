@@ -145,7 +145,7 @@ if ($env:GITHUB_STEP_SUMMARY) {
 - Tools available: **$($toolNames.Count)**
 - Required: **$($required -join ', ')**
 
-<details><summary>First tools</summary>
+<details><summary>Serena tools</summary>
 
 $toolsListMd
 
