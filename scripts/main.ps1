@@ -716,14 +716,43 @@ closingIssuesReferences(first: 50) {
     # find_symbol -> find_referencing_symbols yields cross-refs for touched procedures/triggers, 
     # helping the reviewer flag knock-on effects and missing permission/entitlement updates without shipping entire files.
     function Find-SerenaSymbol([string]$NamePath,[string]$RelPath,[int]$Depth=1) {
-        Serena-Call 'find_symbol' @{ name_path = $NamePath; within_relative_path = $RelPath; depth = $Depth }
+        # The tool expects 'relative_path' (not 'within_relative_path')
+        Serena-Call 'find_symbol' @{
+            name_path     = $NamePath
+            relative_path = $RelPath
+            depth         = $Depth
+        }
     }
 
-    function Get-SerenaReferences([string]$NamePath,[int]$Max=50) {
-        $res = Serena-Call 'find_referencing_symbols' @{ name_path = $NamePath }
+    function Get-SerenaReferences([string]$NamePath,[string]$RelPath,[int]$Max=50) {
+        # find_referencing_symbols requires BOTH name_path and relative_path
+        $res = Serena-Call 'find_referencing_symbols' @{
+            name_path     = $NamePath
+            relative_path = $RelPath
+        }
         $arr = @($res)
         if (-not $arr -or -not $arr.Count) { return @() }
         return $arr | Select-Object -First ([math]::Min($Max, $arr.Count))
+    }
+
+    # Sererna path helpers
+    function Get-RelTo {
+        param([Parameter(Mandatory)][string]$Base,
+            [Parameter(Mandatory)][string]$AbsPath)
+        $rel = [IO.Path]::GetRelativePath($Base, $AbsPath)
+        return ($rel -replace '\\','/')
+    }
+
+    function Get-AppRootForFile {
+        param(
+            [Parameter(Mandatory)][string]$RepoRoot,
+            [Parameter(Mandatory)][string]$RepoRelPath,
+            [Parameter(Mandatory)][string[]]$AllApps  # full paths to app.json files
+        )
+        $abs = Join-Path $RepoRoot $RepoRelPath
+        $appJson = Get-NearestAppJson -Path $abs -AllApps $AllApps
+        if ($appJson) { return (Split-Path $appJson -Parent) }
+        return $RepoRoot   # fallback: repo-root as project
     }
 
     ############################################################################
@@ -1034,85 +1063,112 @@ Process {
 
     ############################################################################
     # 4c. Serena enrichment (optional): symbols, where-used, rich snippets
+    #     - Group files by app (project) using nearest app.json
+    #     - Activate the right project per group
+    #     - Use project-relative paths for Serena tools
     ############################################################################
     $serenaIndex = @{ symbols = @{}; whereUsed = @{} }  # path -> overview, "path#symbol" -> refs[]
-
     $bcObjects    = @()
     $richSnippets = @()
 
+    # Build app groups
+    $repoRoot    = $Env:GITHUB_WORKSPACE
+    $allAppJsons = @(Get-ChildItem -Path $repoRoot -Recurse -Filter 'app.json' |
+                    ForEach-Object { $_.FullName.Replace('\','/') })
+
+    # Map: AppRootAbs => [list of file objects from $relevant]
+    $groups = [ordered]@{}
+    foreach ($f in $relevant) {
+        $appRoot = Get-AppRootForFile -RepoRoot $repoRoot -RepoRelPath $f.path -AllApps $allAppJsons
+        if (-not $groups.ContainsKey($appRoot)) {
+            $groups[$appRoot] = New-Object System.Collections.Generic.List[object]
+        }
+        $groups[$appRoot].Add($f)
+    }
+
     if ($EnableSerena) { Write-Host "::group::Serena enrichment" }
 
-    foreach ($f in $relevant | Where-Object { $_.path -like '*.al' }) {
+    foreach ($appRoot in $groups.Keys) {
 
-        # Load HEAD file content once (for bcObjects / defs / rich snippets)
-        $headContent = Get-FileContent -Owner $owner -Repo $repo -Path $f.path -RefSha $headRef
-        if (-not $headContent) { continue }
-
-        # Top-level object metadata (lightweight, useful signal)
-        $obj = Get-AlTopLevelObject -Text $headContent
-        if ($obj) {
-            $bcObjects += [pscustomobject]@{
-                path       = $f.path
-                objectType = $obj.type
-                objectId   = $obj.id
-                objectName = $obj.name
-            }
+        # Switch Serena to the correct project (idempotent; ok if already active)
+        if ($EnableSerena -and $SerenaUrl) {
+            Serena-Call 'activate_project' @{ project = $appRoot } | Out-Null
+            Write-Host "Activating Serena project: $appRoot"
         }
 
-        # Symbol overview per file (Serena)
-        if ($EnableSerena) {
-            $sym = Get-SerenaSymbolsOverview -RelPath $f.path
-            if ($sym) {
-                # ship as artifact...
-                $ctxFiles += [pscustomobject]@{
-                    path    = "Serena/Symbols/$($f.path).json"
-                    content = ($sym | ConvertTo-Json -Depth 10)
-                }
-                # ...and in-memory (token-light)
-                $serenaIndex.symbols[$f.path] = $sym
-                Write-Host "  + symbols: $($f.path)"
-            }
-        }
+        foreach ($f in ($groups[$appRoot] | Where-Object { $_.path -like '*.al' })) {
 
-        # Determine changed symbol defs near touched lines (for rich snippets + where-used)
-        $touched = if ($validLines.ContainsKey($f.path)) { @($validLines[$f.path]) } else { @() }
-        $defs    = Get-AlChangedSymbols -Text $headContent -TouchedLines $touched
+            # HEAD content for AL parsing / snippets (repo-relative path stays as-is)
+            $headContent = Get-FileContent -Owner $owner -Repo $repo -Path $f.path -RefSha $headRef
+            if (-not $headContent) { continue }
 
-        # Add rich snippets (~200 lines around each changed def)
-        foreach ($d in $defs) {
-            $snippet = Get-BlockSnippetAround -Text $headContent -StartLine $d.start -MaxLines 200
-            if ($snippet) {
-                $richSnippets += [pscustomobject]@{
-                    path  = $f.path
-                    label = $d.name
-                    start = $d.start
-                    code  = $snippet
+            # Top-level object metadata
+            $obj = Get-AlTopLevelObject -Text $headContent
+            if ($obj) {
+                $bcObjects += [pscustomobject]@{
+                    path       = $f.path
+                    objectType = $obj.type
+                    objectId   = $obj.id
+                    objectName = $obj.name
                 }
             }
-        }
 
-        # Where-used per changed symbol (trimmed)
-        if ($EnableSerena -and $defs) {
-            foreach ($d in $defs) {
-                $symHit   = Find-SerenaSymbol -NamePath $d.name -RelPath $f.path -Depth $SerenaSymbolDepth
-                $namePath = if ($symHit -and $symHit[0] -and $symHit[0].name_path) { $symHit[0].name_path } else { $d.name }
-                $refs     = Get-SerenaReferences -NamePath $namePath -Max $SerenaMaxRefs
-                if ($refs -and $refs.Count) {
-                    $key = "$($f.path)#$($d.name)"
-                    $serenaIndex.whereUsed[$key] = $refs
-                    # also keep file artifact
+            # Compute path RELATIVE to the current Serena project (app root)
+            $absFile       = Join-Path $repoRoot $f.path
+            $relProjectPath = Get-RelTo -Base $appRoot -AbsPath $absFile   # e.g. "HelloWorld.al"
+
+            # Per-file symbols overview (Serena)
+            if ($EnableSerena -and $SerenaUrl) {
+                $sym = Get-SerenaSymbolsOverview -RelPath $relProjectPath
+                if ($sym) {
+                    # add as context artifact (repo-relative name in artifact)
                     $ctxFiles += [pscustomobject]@{
-                        path    = "Serena/WhereUsed/$key.json"
-                        content = ($refs | ConvertTo-Json -Depth 10)
+                        path    = "Serena/Symbols/$($f.path).json"
+                        content = ($sym | ConvertTo-Json -Depth 10)
                     }
-                    Write-Host "    └─ where-used: $($d.name) ($($refs.Count))"
+                    $serenaIndex.symbols[$f.path] = $sym
+                    Write-Host "  + symbols: $($f.path)  ⇢  [$relProjectPath]"
+                }
+            }
+
+            # Changed defs near touched lines (for snippets & where-used)
+            $touched = if ($validLines.ContainsKey($f.path)) { @($validLines[$f.path]) } else { @() }
+            $defs    = Get-AlChangedSymbols -Text $headContent -TouchedLines $touched
+
+            # Rich code snippets around changed defs
+            foreach ($d in $defs) {
+                $snippet = Get-BlockSnippetAround -Text $headContent -StartLine $d.start -MaxLines 200
+                if ($snippet) {
+                    $richSnippets += [pscustomobject]@{
+                        path  = $f.path
+                        label = $d.name
+                        start = $d.start
+                        code  = $snippet
+                    }
+                }
+            }
+
+            # Where-used per changed symbol (trimmed)
+            if ($EnableSerena -and $SerenaUrl -and $defs) {
+                foreach ($d in $defs) {
+                    $symHit   = Find-SerenaSymbol -NamePath $d.name -RelPath $relProjectPath -Depth $SerenaSymbolDepth
+                    $namePath = if ($symHit -and $symHit[0] -and $symHit[0].name_path) { $symHit[0].name_path } else { $d.name }
+                    $refs     = Get-SerenaReferences -NamePath $namePath -RelPath $relProjectPath -Max $SerenaMaxRefs
+                    if ($refs -and $refs.Count) {
+                        $key = "$($f.path)#$($d.name)"   # keep repo-relative keys for the model
+                        $serenaIndex.whereUsed[$key] = $refs
+                        $ctxFiles += [pscustomobject]@{
+                            path    = "Serena/WhereUsed/$key.json"
+                            content = ($refs | ConvertTo-Json -Depth 10)
+                        }
+                        Write-Host "    └─ where-used: $($d.name) ($($refs.Count))"
+                    }
                 }
             }
         }
     }
 
     if ($EnableSerena) { Write-Host "::endgroup::" }
-
 
     ###########################################################################
     # 5. Autodetect app context
