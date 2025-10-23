@@ -721,6 +721,7 @@ closingIssuesReferences(first: 50) {
             name_path     = $NamePath
             relative_path = $RelPath
             depth         = $Depth
+            substring_matching = $true
         }
     }
 
@@ -850,6 +851,64 @@ closingIssuesReferences(first: 50) {
         }
         if (-not $start -or -not $end) { return $null }
         return @{ start = $start; end = $end }
+    }
+
+    # pull probable AL identifiers from head-side diff text
+    function Get-AlIdentifiersFromDiff {
+        param($FileObj)
+
+        # Concatenate HEAD-side lines (ln2 != $null) from this file's diff
+        $sb = [System.Text.StringBuilder]::new()
+        foreach ($chunk in $FileObj.chunks) {
+            foreach ($chg in $chunk.changes) {
+                if ($chg.ln2) {
+                    # strip a single leading "+" or " " if present in parse-diff payload
+                    $line = $chg.content
+                    if ($line.Length -gt 0 -and ($line[0] -eq '+' -or $line[0] -eq ' ')) {
+                        $line = $line.Substring(1)
+                    }
+                    $null = $sb.AppendLine($line)
+                }
+            }
+        }
+        $text = $sb.ToString()
+        if ([string]::IsNullOrWhiteSpace($text)) { return @() }
+
+        $names = New-Object System.Collections.Generic.HashSet[string]
+
+        # procedure / trigger names
+        [regex]::Matches($text, '(?im)^\s*(?:local\s+)?procedure\s+([A-Za-z_][A-Za-z0-9_]*)') | ForEach-Object {
+            $null = $names.Add($_.Groups[1].Value)
+        }
+        [regex]::Matches($text, '(?im)^\s*trigger\s+([A-Za-z_][A-Za-z0-9_]*)') | ForEach-Object {
+            $null = $names.Add($_.Groups[1].Value)
+        }
+
+        # table/page field controls and actions/groups
+        [regex]::Matches($text, '(?im)^\s*(field|action|group)\s*\(\s*(""(?:[^""]|"""")+""|""[^""]+""|[^,]+)\s*,') | ForEach-Object {
+            $raw = $_.Groups[2].Value.Trim()
+            $val = $raw.Trim('"') -replace '""','"'
+            if ($val) { $null = $names.Add($val) }
+        }
+
+        # table fields in object definition: field(<id>;<Name>; <Type>)
+        [regex]::Matches($text, '(?im)\bfield\s*\(\s*\d+\s*;\s*(""(?:[^""]|"""")+""|""[^""]+""|[A-Za-z_][A-Za-z0-9_]*)\s*;') | ForEach-Object {
+            $raw = $_.Groups[1].Value
+            $val = $raw.Trim('"') -replace '""','"'
+            if ($val) { $null = $names.Add($val) }
+        }
+
+        # enum / enumextension names and values
+        [regex]::Matches($text, '(?im)^\s*enum(?:extension)?\s+\d+\s+(""(?:[^""]|"""")+""|""[^""]+""|\w+)') | ForEach-Object {
+            $val = $_.Groups[1].Value.Trim('"') -replace '""','"'
+            if ($val) { $null = $names.Add($val) }
+        }
+        [regex]::Matches($text, '(?im)^\s*value\s*\(\s*\d+\s*;\s*(""(?:[^""]|"""")+""|""[^""]+""|\w+)') | ForEach-Object {
+            $val = $_.Groups[1].Value.Trim('"') -replace '""','"'
+            if ($val) { $null = $names.Add($val) }
+        }
+
+        return @($names)
     }
  
     function Test-Overlap($a, $b) {
@@ -1132,9 +1191,35 @@ Process {
     }
 
     ############################################################################
-    # 4b. Add changed files themselves as extra context (optional)
+    # 4a.1 Local HEAD snippets around changed spans (always on, low cost)
     ############################################################################
     $ctxFiles = @()
+    Write-Host "::group::Local snippets from changed spans"
+    $maxLocalSlicesPerFile = 8
+    foreach ($f in $relevant) {
+        $spans = Get-ChangedSpansFromFile $f
+        if (-not $spans) { continue }
+
+        $count = 0
+        foreach ($span in $spans) {
+            if ($count -ge $maxLocalSlicesPerFile) { break }
+            $slice = Get-RepoSnippet -Owner $owner -Repo $repo -Path $f.path -RefSha $headRef `
+                                    -Range $span -PadBefore 6 -PadAfter 4 -MaxBytes 8192
+            if ($slice -and $slice.text) {
+                $ctxFiles += [pscustomobject]@{
+                    path    = "Local/Snippets/$($f.path)#L$($slice.start)-$($slice.end).al"
+                    content = $slice.text
+                }
+                $count++
+                Write-Host ("  + local slice: {0} L{1}-{2} ({3} chars)" -f $f.path,$slice.start,$slice.end,$slice.text.Length)
+            }
+        }
+    }
+    Write-Host "::endgroup::"
+
+    ############################################################################
+    # 4b. Add changed files themselves as extra context (optional)
+    ############################################################################
     if ($IncludeChangedFilesAsContext) {
         Write-Host "::group::Adding changed files as context"
         $prFiles = Get-PRFiles -Owner $owner -Repo $repo -PrNumber $prNumber
@@ -1152,21 +1237,6 @@ Process {
             }
         }
         Write-Host "::endgroup::"
-    }
-
-    # Cap context payload (~700 KB). Remove largest files first.
-    $maxCtxBytes = 700KB
-    $ctxBytes = ($ctxFiles | ForEach-Object {
-        [System.Text.Encoding]::UTF8.GetByteCount($_.content)
-    } | Measure-Object -Sum).Sum
-
-    if ($ctxBytes -gt $maxCtxBytes) {
-        # sort by size DESC so we drop the biggest until under budget
-        $ctxFiles = $ctxFiles | Sort-Object { $_.content.Length } -Descending
-        while ($ctxBytes -gt $maxCtxBytes -and $ctxFiles.Count -gt 0) {
-            $ctxBytes -= $ctxFiles[0].content.Length
-            $ctxFiles = $ctxFiles[1..($ctxFiles.Count-1)]
-        }
     }
 
     ############################################################################
@@ -1257,6 +1327,43 @@ Process {
                 $defs = $defs | Sort-Object name_path -Unique
             }
 
+            # diff-driven symbol resolution (targeted)
+            # If overview didn't give us ranges for everything, try resolving identifiers
+            # seen in the diff and add any with ranges to $defs.
+            $maxResolvedPerFile = 20
+            $resolved = 0
+            $knownKeys = @{}
+            foreach ($d in $defs) { $knownKeys[$d.name_path] = $true }
+
+            $alNames = Get-AlIdentifiersFromDiff $f
+            foreach ($name in $alNames) {
+                if ($resolved -ge $maxResolvedPerFile) { break }
+                # Skip if we already have a symbol with this name_path
+                if ($knownKeys.ContainsKey($name)) { continue }
+
+                $hit = Find-SerenaSymbol -NamePath $name -RelPath $relProjectPath -Depth $SerenaSymbolDepth
+                if (-not $hit) { continue }
+
+                # Prefer the first good candidate with a range
+                foreach ($symHitItem in @($hit)) {
+                    $r = Get-SymbolRange $symHitItem
+                    if ($r) {
+                        $defs += [pscustomobject]@{
+                            name      = ($symHitItem.name ?? $name)
+                            name_path = ($symHitItem.name_path ?? $name)
+                            type      = ($symHitItem.type ?? $symHitItem.kind ?? 'symbol')
+                            range     = $r
+                        }
+                        $knownKeys[$symHitItem.name_path] = $true
+                        $resolved++
+                        Write-Host ("    └─ resolved: {0}  L{1}-{2}" -f $symHitItem.name_path,$r.start,$r.end)
+                        break
+                    }
+                }
+            }
+            # de-dup after adding newly resolved items
+            $defs = $defs | Sort-Object name_path -Unique          
+
             # Fetch code snippets for those changed symbols (client-side slicing first)
             if ($defs -and $defs.Count) {
                 foreach ($d in $defs) {
@@ -1318,6 +1425,24 @@ Process {
     }
 
     if ($EnableSerena) { Write-Host "::endgroup::" }
+
+    # Cap context payload (~700 KB). Remove largest entries first.
+    $maxCtxBytes = 700KB
+    $ctxBytes = ($ctxFiles | ForEach-Object {
+        [Text.Encoding]::UTF8.GetByteCount($_.content)
+    } | Measure-Object -Sum).Sum
+
+    if ($ctxBytes -gt $maxCtxBytes) {
+        $ctxFiles = $ctxFiles | Sort-Object {
+            [Text.Encoding]::UTF8.GetByteCount($_.content)
+        } -Descending
+
+        while ($ctxBytes -gt $maxCtxBytes -and $ctxFiles.Count -gt 0) {
+            $removeBytes = [Text.Encoding]::UTF8.GetByteCount($ctxFiles[0].content)
+            $ctxFiles = $ctxFiles | Select-Object -Skip 1
+            $ctxBytes -= $removeBytes
+        }
+    }
 
     ###########################################################################
     # 5. Autodetect app context
@@ -1490,7 +1615,7 @@ Process {
     }
 
     ############################################################################
-    # 6. Gather linked issues
+    # 7. Gather linked issues
     ############################################################################    
     $issueCtx = @()
 
@@ -1527,7 +1652,7 @@ Process {
     }
 
     ############################################################################
-    # 7. Build AI prompt & call AI
+    # 8. Build AI prompt & call AI
     ############################################################################
     $maxInline = if ($MaxComments -gt 0) { $MaxComments } else { 1000 }
 
@@ -1597,7 +1722,10 @@ $ProjectContext
 $rubric
 
 <additional_inputs>
- - serena: serena MCP symbols and code snippets (metadata); use for reasoning only, do not quote verbatim.
+ - local snippets: files under "Local/Snippets/*" are HEAD code slices around changed lines; prefer them for reasoning over the raw unified diff.
+ - serena symbols: "Serena/Symbols/*.json" are per-file symbol overviews (metadata only; may lack ranges).
+ - serena snippets: "Serena/Snippets/*#<symbol>.al" are code slices for resolved symbols.
+ - where-used: "Serena/WhereUsed/*#<symbol>.json" are trimmed cross-references; use to discuss impact/ripple effects, not for anchoring inline comments.
 </additional_inputs>
 
 <reasoning_effort>$ReasoningEffort</reasoning_effort>
@@ -1647,6 +1775,26 @@ $BasePromptExtra
         [pscustomobject]@{
             path = $f.path
             diff = ($lines -join "`n")
+        }
+    }
+
+    ############################################################################
+    # Final context size cap (drop largest entries first)
+    ############################################################################
+    $maxCtxBytesTotal = 900KB
+    $ctxBytes = ($ctxFiles | ForEach-Object {
+        [Text.Encoding]::UTF8.GetByteCount($_.content)
+    } | Measure-Object -Sum).Sum
+
+    if ($ctxBytes -gt $maxCtxBytesTotal) {
+        $ctxFiles = $ctxFiles | Sort-Object {
+            [Text.Encoding]::UTF8.GetByteCount($_.content)
+        } -Descending
+
+        while ($ctxBytes -gt $maxCtxBytesTotal -and $ctxFiles.Count -gt 0) {
+            $removeBytes = [Text.Encoding]::UTF8.GetByteCount($ctxFiles[0].content)
+            $ctxFiles = $ctxFiles | Select-Object -Skip 1
+            $ctxBytes -= $removeBytes
         }
     }
 
@@ -1746,7 +1894,7 @@ $BasePromptExtra
     $review.summary += "`n<!-- ai-sha:$headRef -->"
 
     ########################################################################
-    # 8. Map inline comments & submit review
+    # 9. Map inline comments & submit review
     ########################################################################
 
     # for a given file+line, which side LEFT or RIGHT does GitHub expect?
@@ -1796,7 +1944,7 @@ $BasePromptExtra
     }
 
     ########################################################################
-    # 9. Create review
+    # 10. Create review
     ########################################################################
 
     try {

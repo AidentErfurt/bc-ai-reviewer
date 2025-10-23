@@ -107,27 +107,6 @@ $toolsJson = $tools | ConvertTo-Json -Depth 8 -Compress
 $show = ($toolNames | Select-Object -First 10) -join ', '
 Write-Host "Tools: $show$(if ($toolNames.Count -gt 10) { ', …' })"
 
-# --- activate projects if available ---
-if ($toolNames -contains 'activate_project') {
-  $apps = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter 'app.json' -Recurse -File -ErrorAction SilentlyContinue
-  if ($apps) {
-    foreach ($app in $apps) {
-      $projDir = Split-Path $app.FullName -Parent
-      Write-Host "Activating project: $projDir"
-      try {
-        Invoke-SerenaTool -Url $Url -SessionId $Sid -SessionHdrName $Hdr -Name 'activate_project' `
-          -ToolArgs @{ project = $projDir } -TimeoutSec $TimeoutSec | Out-Null
-      } catch {
-        Write-Warning "activate_project failed for $($projDir): $($_.Exception.Message)"
-      }
-    }
-  } else {
-    Write-Host "No app.json found under $env:GITHUB_WORKSPACE"
-  }
-} else {
-  Write-Host "'activate_project' tool not available; skipping activation."
-}
-
 # Build compact Markdown list of first 40 tools (serena has 27 atm)
 $bt = [char]96  # literal `
 $toolsListMd = (
