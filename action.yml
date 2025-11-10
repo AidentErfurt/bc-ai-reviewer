@@ -1,10 +1,10 @@
-name: "Business Central AI Code Reviewer"
+name: "Business Central AI Code Reviewer (Continue + MCP)"
 description: "Run an AI-powered, Business Central specific code review on a Pull Request using OpenAI, Azure OpenAI or OpenRouter.ai."
 branding:
   icon:  'package'
   color: 'orange'
 author: "Aident GmbH"
-version: "1.0.0"
+version: "2.0.0"
 
 inputs:
   GITHUB_TOKEN:
@@ -12,59 +12,26 @@ inputs:
     required: true
     type: string
 
-  AI_PROVIDER:
-    description: "openai | azure | openrouter"
+  # Continue (Hub) + Model
+  CONTINUE_API_KEY:
+    description: "Continue Hub API key"
+    required: true
     type: string
-    default: "azure"
-
-  AI_MODEL:
-    description: "AI_MODEL is the base model. For Azure, set AZURE_DEPLOYMENT to your deployments friendly name (falls back to AI_MODEL if omitted)."
-    type: string
-    default: "o3-mini"
-
-  AI_API_KEY:
-    description: "OpenAI API key (required if provider=openai | openrouter)"
-    type: string
+  CONTINUE_CONFIG:
+    description: "Hub slug for your reviewer (e.g. aident/bc-pr-reviewer or continuedev/review-bot)"
     required: false
-
-  AZURE_ENDPOINT:
-    description: "Azure OpenAI endpoint (required if provider=azure)"
+    default: "continuedev/review-bot"
     type: string
-    required: false
-
-  AZURE_API_KEY:
-    description: "Azure OpenAI API key (required if provider=azure)"
-    type: string
-    required: false
-
-  AZURE_API_VERSION:
-    description: "Azure OpenAI API version"
-    type: string
-    default: "2025-01-01-preview"
-
-  AZURE_DEPLOYMENT:
-    description: "Azure OpenAI deployment name (friendly name you created in Azure)"
-    type: string
-    required: false
 
   # Review behaviour
   APPROVE_REVIEWS:
-    description: "Let the bot approve / request-changes"
+    description: "Let the bot approve / request-changes (based on AI output 'suggestedAction')"
     type: boolean
     default: false
-
   MAX_COMMENTS:
-    description: |
-      Maximum inline comments to post.
-      0 = unlimited, but GitHub caps a single review at 100 comments
-      and a PR at 1000 total.
+    description: "Max inline comments to post (0 = unlimited; GitHub caps single PR at 1000)."
     type: number
     default: 10
-
-  BASE_PROMPT_EXTRA:
-    description: "Free-form text injected into the system prompt (optional)"
-    type: string
-    default: ""
 
   # Context customization
   PROJECT_CONTEXT:
@@ -86,64 +53,40 @@ inputs:
     description: "Comma-separated globs to exclude"
     type: string
     default: ""
-  
-  # Fetch linked issues
+
+  # Fetch linked issues (optional context)
   ISSUE_COUNT:
     description: "Max linked issues to fetch (0 = all)"
     type: number
     default: 0
-
   FETCH_CLOSED_ISSUES:
     description: "Include closed issues as context"
     type: boolean
     default: true
 
+  # App autodiscovery
   AUTO_DETECT_APPS:
     description: "Enable automatic app.json discovery"
     type: boolean
     default: true
-
   INCLUDE_APP_PERMISSIONS:
     description: "Include *.PermissionSet.al / *.Entitlement.al from each app"
     type: boolean
     default: true
-
   INCLUDE_APP_MARKDOWN:
     description: "Include *.md files from each app"
     type: boolean
     default: true
 
-  # Guidelines
-  GUIDELINE_RULES_PATH:
-    description: "Path to JSON or PSD1 file defining custom AL-Guideline rules"
+  # Prompt style
+  BASE_PROMPT_EXTRA:
+    description: "Free-form text injected into the reviewers prompt (optional)"
     type: string
-    required: false
     default: ""
-
-  DISABLE_GUIDELINEDOCS:
-    description: "Skip fetching the official AL-Guidelines docs"
-    type: boolean
-    default: false
-
-  INCLUDE_CHANGED_FILES_AS_CONTEXT:
-    description: "Ship every file that is touched by the PR to the LLM as an extra context file"
-    type: boolean
-    default: false
-
-  PROMPT_STYLE:
-    description: "auto | gpt5 | generic - use GPT-5-optimized prompt when 'gpt-5*' model. 'generic' forces legacy prompt."
-    type: string
-    default: "auto"
-
-  REASONING_EFFORT:
-    description: "low | medium | high - hint for GPT-5 reasoning depth; ignored by other models."
-    type: string
-    default: "medium"
   LOG_PROMPT:
-    description: "Log full prompt (diff + context) to runner logs"
+    description: "Log prompt JSON (redacted) to runner logs"
     type: boolean
     default: false
-
 
 runs:
   using: composite
@@ -153,63 +96,42 @@ runs:
       with:
         node-version: 20
 
-    - name: Install diff parser
-      shell: pwsh
-      working-directory: ${{ github.action_path }}
-      run: npm install --no-save parse-diff@latest
+    - name: Install helpers (parse-diff) & Continue CLI
+      shell: bash
+      run: |
+        npm install --no-save parse-diff@latest
+        npm i -g @continuedev/cli
 
-    - name: Run AI Code Review
+    # (Optional) Install uv so Serena MCP can be launched by Continue if your config uses uvx
+    - name: Install uv (for Serena MCP, optional)
+      shell: bash
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh || true
+        echo "$HOME/.local/bin" >> $GITHUB_PATH || true
+
+    - name: Run AI Code Review (Continue + MCP)
       shell: pwsh
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_EVENT_PATH: ${{ github.event_path }}
-        OPENAI_API_KEY: ${{ inputs.AI_API_KEY }}
-        AZURE_OPENAI_API_KEY: ${{ inputs.AZURE_API_KEY }}
-        AZURE_OPENAI_ENDPOINT: ${{ inputs.AZURE_ENDPOINT }}
+        CONTINUE_API_KEY: ${{ inputs.CONTINUE_API_KEY }}
+        CONTINUE_CONFIG: ${{ inputs.CONTINUE_CONFIG }}
       run: |
-        . '${{ github.action_path }}/scripts/main.ps1'
-        if ($Env:AZURE_OPENAI_ENDPOINT) { Write-Host "::add-mask::$Env:AZURE_OPENAI_ENDPOINT" }
-        if ($Env:AZURE_OPENAI_API_KEY)  { Write-Host "::add-mask::$Env:AZURE_OPENAI_API_KEY" }
-        if ($Env:OPENAI_API_KEY)  { Write-Host "::add-mask::$Env:OPENAI_API_KEY" }
-        
+        . '${{ github.action_path }}/scripts/continue-review.ps1'
         $p = @{
-          GitHubToken        = '${{ inputs.GITHUB_TOKEN }}'
-          Provider           = '${{ inputs.AI_PROVIDER }}'
-          Model              = '${{ inputs.AI_MODEL }}'
-          MaxComments        = [int]'${{ inputs.MAX_COMMENTS }}'
-          ProjectContext     = '${{ inputs.PROJECT_CONTEXT }}'
-          ContextFiles       = '${{ inputs.CONTEXT_FILES }}'
-          IncludePatterns    = '${{ inputs.INCLUDE_PATTERNS }}'
-          ExcludePatterns    = '${{ inputs.EXCLUDE_PATTERNS }}'
-          IssueCount         = [int]'${{ inputs.ISSUE_COUNT }}'
-          AutoDetectApps        = [bool]::Parse('${{ inputs.AUTO_DETECT_APPS }}')
-          IncludeAppPermissions = [bool]::Parse('${{ inputs.INCLUDE_APP_PERMISSIONS }}')
-          IncludeAppMarkdown    = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
-          BasePromptExtra    = '${{ inputs.BASE_PROMPT_EXTRA }}'
-          GuidelineRulesPath = '${{ inputs.GUIDELINE_RULES_PATH }}'
-          DisableGuidelineDocs    = [switch]::new([bool]::Parse('${{ inputs.DISABLE_GUIDELINEDOCS }}'))
-          IncludeChangedFilesAsContext = [bool]::Parse('${{ inputs.INCLUDE_CHANGED_FILES_AS_CONTEXT }}')
-          PromptStyle        = '${{ inputs.PROMPT_STYLE }}'
-          ReasoningEffort    = '${{ inputs.REASONING_EFFORT }}'
-          LogPrompt = [switch]::new([bool]::Parse('${{ inputs.LOG_PROMPT }}'))
+          GitHubToken                  = '${{ inputs.GITHUB_TOKEN }}'
+          MaxComments                  = [int]'${{ inputs.MAX_COMMENTS }}'
+          ProjectContext               = '${{ inputs.PROJECT_CONTEXT }}'
+          ContextFiles                 = '${{ inputs.CONTEXT_FILES }}'
+          IncludePatterns              = '${{ inputs.INCLUDE_PATTERNS }}'
+          ExcludePatterns              = '${{ inputs.EXCLUDE_PATTERNS }}'
+          IssueCount                   = [int]'${{ inputs.ISSUE_COUNT }}'
+          FetchClosedIssues            = [bool]::Parse('${{ inputs.FETCH_CLOSED_ISSUES }}')
+          AutoDetectApps               = [bool]::Parse('${{ inputs.AUTO_DETECT_APPS }}')
+          IncludeAppPermissions        = [bool]::Parse('${{ inputs.INCLUDE_APP_PERMISSIONS }}')
+          IncludeAppMarkdown           = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
+          BasePromptExtra              = '${{ inputs.BASE_PROMPT_EXTRA }}'
+          LogPrompt                    = [switch]::new([bool]::Parse('${{ inputs.LOG_PROMPT }}'))
         }
-        if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true')  { $p.ApproveReviews  = $true }
-        if ('${{ inputs.FETCH_CLOSED_ISSUES }}' -eq 'true') { $p.FetchClosedIssues = $true }
-
-        if ($p.Provider -in @('openai','openrouter')) {
-          $p.ApiKey = $Env:OPENAI_API_KEY
-          $p.Remove('AzureEndpoint')
-          $p.Remove('AzureApiKey')
-          $p.Remove('AzureApiVersion')
-          $p.Remove('AZURE_DEPLOYMENT')
-        } else {
-          $p.AzureEndpoint   = $Env:AZURE_OPENAI_ENDPOINT
-          $p.AzureApiKey     = $Env:AZURE_OPENAI_API_KEY
-          $p.AzureApiVersion = '${{ inputs.AZURE_API_VERSION }}'
-          $p.Remove('ApiKey')
-          if ('${{ inputs.AZURE_DEPLOYMENT }}') {
-            $p.AzureDeployment = '${{ inputs.AZURE_DEPLOYMENT }}'
-          }
-        }
-
-        Invoke-AICodeReview @p
+        if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true') { $p.ApproveReviews = $true }
+        Invoke-BCContinueReview @p
