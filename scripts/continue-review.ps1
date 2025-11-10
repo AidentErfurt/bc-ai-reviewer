@@ -313,35 +313,78 @@ function Get-JsonFromText {
   }
 }
 
+function Resolve-ContinueConfig {
+  param([Parameter(Mandatory)][string]$Config)
+  # Already a URL?
+  if ($Config -match '^(https?)://') { return $Config }
+  # owner/slug → Hub URL
+  if ($Config -match '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
+    return "https://hub.continue.dev/$Config"
+  }
+  # Local path or other id → passthrough
+  return $Config
+}
+
 function Invoke-ContinueCli {
   param(
     [Parameter(Mandatory)][string]$Config,
     [Parameter(Mandatory)][string]$Prompt
   )
-  $env:CONTINUE_LOG_LEVEL = "debug"
 
-  # Prefer feeding the prompt via stdin to avoid argument-length and quoting issues.
+  # Verbose diagnostics to catch URL / auth problems
+  $env:CONTINUE_LOG_LEVEL = "debug"
+  $env:DEBUG = "continue:*"
+  $env:NODE_DEBUG = "http,https"
+
+  Write-Host "::group::Continue CLI environment"
+  try {
+    $ver = (& cn --version) 2>&1
+    Write-Host "cn --version:`n$ver"
+  } catch {
+    Write-Host "Could not run 'cn --version': $($_.Exception.Message)"
+  }
+  Write-Host "CONTINUE_CONFIG (resolved): $Config"
+  if ($env:CONTINUE_API_KEY) { Write-Host "CONTINUE_API_KEY: [set]" } else { Write-Host "CONTINUE_API_KEY: [missing]" }
+  if ($env:CONTINUE_SERVER_URL) { Write-Host "CONTINUE_SERVER_URL: $env:CONTINUE_SERVER_URL" }
+  if ($env:CONTINUE_API_BASE)   { Write-Host "CONTINUE_API_BASE:   $env:CONTINUE_API_BASE" }
+  Write-Host "::endgroup::"
+
+  # Use an on-disk prompt, but pass it as an argument string (some cn builds ignore '-' stdin)
   $tempPromptFile = Join-Path $env:RUNNER_TEMP 'continue_prompt.txt'
-  # Ensure prompt file exists (Prompt may be long); write it to temp file
   $Prompt | Set-Content -Path $tempPromptFile -Encoding UTF8
 
-  Write-Host "Running Continue CLI (feeding prompt via stdin) ..."
-  # Pipe the prompt into cn via stdin; capture combined stdout/stderr
-  $procOutput = Get-Content -Raw -Path $tempPromptFile | & cn --config $Config -p - --auto 2>&1
-  $exit = $LASTEXITCODE
+  Write-Host "Running Continue CLI (argument-passed prompt) ..."
+  $args = @('--config', $Config, '-p', (Get-Content -Raw -Path $tempPromptFile), '--auto')
 
-  $outText = if ($procOutput -is [System.Array]) { ($procOutput -join "`n") } else { [string]$procOutput }
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = 'cn'
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError  = $true
+  $psi.UseShellExecute        = $false
+  foreach ($a in $args) { [void]$psi.ArgumentList.Add($a) }
 
-  if ($exit -ne 0) {
-    throw ("Continue CLI failed (exit {0}):`n{1}" -f $exit, $outText)
+  $p = New-Object System.Diagnostics.Process
+  $p.StartInfo = $psi
+  [void]$p.Start()
+  $stdOut = $p.StandardOutput.ReadToEnd()
+  $stdErr = $p.StandardError.ReadToEnd()
+  $p.WaitForExit()
+
+  if ($p.ExitCode -ne 0) {
+    $snippet = ($stdErr + "`n" + $stdOut)
+    if ($snippet.Length -gt 4000) { $snippet = $snippet.Substring(0,4000) + "`n...[truncated]..." }
+    throw ("Continue CLI failed (exit {0}): {1}" -f $p.ExitCode, $snippet)
   }
 
-  return Get-JsonFromText -Text $outText
+  $combined = if ([string]::IsNullOrWhiteSpace($stdOut)) { $stdErr } else { $stdOut }
+  return Get-JsonFromText -Text $combined
 }
 
+# Resolve config (Hub slug or local), log what we resolved to
+$cfgRaw     = if ($env:CONTINUE_CONFIG) { $env:CONTINUE_CONFIG } else { "continuedev/review-bot" }
+$cfg        = Resolve-ContinueConfig -Config $cfgRaw
+Write-Host "Resolved CONTINUE_CONFIG: '$cfgRaw' -> '$cfg'"
 
-# Resolve config (Hub slug or local)
-$cfg        = if ($env:CONTINUE_CONFIG) { $env:CONTINUE_CONFIG } else { "continuedev/review-bot" }
 $promptText = Get-Content $tempPrompt -Raw
 
 # Run Continue and parse JSON result
