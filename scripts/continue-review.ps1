@@ -397,18 +397,18 @@ function Invoke-ContinueCli {
 
   # Call cn WITHOUT stdin/pipes; pass the prompt as a single arg
   # Note: quoting is handled by PowerShell when you pass as separate args
-  Write-Host "Running Continue CLI..."
+  Write-Host "Running Continue CLI (DEBUG)..."
 
   & cn --config continuedev/review-bot --auto -p "Return ONLY the string OK"
 
 
-  & cn `
-    --hub $env:CONTINUE_HUB_URL `
-    --config $Config `
-    -p (Get-Content -Raw $tempPromptFile) `
-    --auto `
-      1> $outFile `
-      2> $errFile
+#   & cn `
+#     --hub $env:CONTINUE_HUB_URL `
+#     --config $Config `
+#     -p (Get-Content -Raw $tempPromptFile) `
+#     --auto `
+#       1> $outFile `
+#       2> $errFile
 
     # Known log locations
     $runTemp = $env:RUNNER_TEMP
@@ -453,13 +453,6 @@ function Invoke-ContinueCli {
         throw ("Continue CLI failed (exit {0}): {1}: {2}" -f $exit, $errJson.status, $errJson.message)
       }
     } catch { }
-
-    # Tail helpful info
-    $tail = ($stdout + "`n" + $stderr) -split "`r?`n"
-    if ($tail.Count -gt 200) { $tail = $tail[(-200)..(-1)] }
-    Write-Host "::group::Continue CLI (last 200 lines)"
-    Write-Host ($tail -join "`n")
-    Write-Host "::endgroup::"
 
     $hint = (Test-Path $contRaw) ? " Full raw log: $contRaw" : ""
     throw ("Continue CLI failed (exit {0}).{1}" -f $exit, $hint)
