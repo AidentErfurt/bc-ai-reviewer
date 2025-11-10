@@ -310,14 +310,44 @@ if (-not $env:CONTINUE_HUB_URL -or [string]::IsNullOrWhiteSpace($env:CONTINUE_HU
   $env:CONTINUE_HUB_URL = "https://hub.continue.dev"
 }
 
-# Warn about empty URL-like envs that can cause 401 "Invalid URL" downstream
-$badVars = @()
-[Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object {
-  $k = $_.Key; $v = [string]$_.Value
-  if ($k -match '(BASE_URL|ENDPOINT)' -and [string]::IsNullOrWhiteSpace($v)) { $badVars += $k }
+# --- Sanitize URL-like provider env vars that commonly cause `401 "Invalid URL"` ---
+function Remove-EmptyUrlEnv {
+  param([string[]]$Names)
+  $removed = @()
+  foreach ($n in $Names) {
+    $v = [Environment]::GetEnvironmentVariable($n)
+    if ($null -ne $v) {
+      if ([string]::IsNullOrWhiteSpace($v)) {
+        [Environment]::SetEnvironmentVariable($n, $null) # unset
+        $removed += $n
+      } elseif ($v -notmatch '^(https?://)') {
+        # value present but not an http(s) URL — many SDKs error with "Invalid URL"
+        [Environment]::SetEnvironmentVariable($n, $null)
+        $removed += $n
+      }
+    }
+  }
+  return $removed
 }
-if ($badVars.Count -gt 0) {
-  Write-Warning ("Empty URL-like environment variables detected: {0}" -f ($badVars -join ', '))
+
+# Known provider URL/endpoint variables across OpenAI/Azure/etc.
+$likelyUrlVars = @(
+  'OPENAI_API_BASE','OPENAI_BASE_URL','OPENAI_API_HOST',
+  'AZURE_OPENAI_ENDPOINT','AZURE_OPENAI_BASE',
+  'ANTHROPIC_API_URL','ANTHROPIC_BASE_URL',
+  'COHERE_BASE_URL','COHERE_API_BASE',
+  'MISTRAL_API_BASE','MISTRAL_BASE_URL',
+  'GROQ_API_BASE','GROQ_BASE_URL',
+  'TOGETHER_BASE_URL','TOGETHER_API_BASE'
+)
+
+# Also catch any *_BASE_URL / *_ENDPOINT left blank by the runner
+$dynamicUrlVars = [Environment]::GetEnvironmentVariables().Keys |
+  Where-Object { $_ -match '(_BASE_URL|_ENDPOINT)$' }
+
+$removedVars = Remove-EmptyUrlEnv -Names ($likelyUrlVars + $dynamicUrlVars | Sort-Object -Unique)
+if ($removedVars.Count -gt 0) {
+  Write-Warning ("Unset empty/malformed URL env vars to avoid provider errors: {0}" -f ($removedVars -join ', '))
 }
 
 # ---------- Helpers ----------
@@ -364,7 +394,13 @@ function Invoke-ContinueCli {
 
   Write-Host "Running Continue CLI (stdin) ..."
   $tempLog = Join-Path $env:RUNNER_TEMP 'continue_cli_raw.log'
-  $raw = Get-Content -Raw -Path $tempPromptFile | & cn --config $Config -p - --auto 2>&1
+  # Be explicit about the Hub to avoid any implicit URL resolution issues inside cn.
+  $hubArg = $env:CONTINUE_HUB_URL
+  if ([string]::IsNullOrWhiteSpace($hubArg)) {
+    $hubArg = "https://hub.continue.dev"
+  }
+  $raw = Get-Content -Raw -Path $tempPromptFile `
+    | & cn --hub $hubArg --config $Config -p - --auto 2>&1
   $exit = $LASTEXITCODE
   ($raw -is [array] ? ($raw -join "`n") : [string]$raw) | Set-Content -Path $tempLog -Encoding UTF8
 
