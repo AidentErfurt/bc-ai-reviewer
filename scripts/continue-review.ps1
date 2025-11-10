@@ -374,65 +374,70 @@ function Invoke-ContinueCli {
     [Parameter(Mandatory)][string]$Config,  # slug or local file
     [Parameter(Mandatory)][string]$Prompt
   )
+
   if (-not $env:CONTINUE_LOG_LEVEL) { $env:CONTINUE_LOG_LEVEL = "debug" }
 
   Write-Host "::group::Continue CLI environment"
-  try {
-    $cnVer = (& cn --version) 2>&1
-  } catch {
-    throw "Continue CLI (cn) not found on PATH."
-  }
+  try { $cnVer = (& cn --version) 2>&1 } catch { throw "Continue CLI (cn) not found on PATH." }
   Write-Host "cn --version:`n$cnVer"
   Write-Host "CONTINUE_CONFIG (slug/file): $Config"
+  if ([string]::IsNullOrWhiteSpace($env:CONTINUE_HUB_URL)) { $env:CONTINUE_HUB_URL = "https://hub.continue.dev" }
   Write-Host ("CONTINUE_HUB_URL: " + $env:CONTINUE_HUB_URL)
   Write-Host ("CONTINUE_API_KEY: " + ($(if ($env:CONTINUE_API_KEY) { "[set]" } else { "[missing]" })))
   Write-Host "::endgroup::"
 
-  # Write prompt to a temp file and feed via stdin
+  # Write prompt to a temp file
   $tempPromptFile = Join-Path $env:RUNNER_TEMP 'continue_prompt.txt'
   $Prompt | Set-Content -Path $tempPromptFile -Encoding UTF8
 
-    Write-Host "Running Continue CLI (stdin) ..."
-  $tempLog = Join-Path $env:RUNNER_TEMP 'continue_cli_raw.log'
-  # Be explicit about the Hub to avoid any implicit URL resolution issues inside cn.
-  $hubArg = $env:CONTINUE_HUB_URL
-  if ([string]::IsNullOrWhiteSpace($hubArg)) { $hubArg = "https://hub.continue.dev" }
+  # Output files
+  $outFile = Join-Path $env:RUNNER_TEMP 'continue_cli_stdout.txt'
+  $errFile = Join-Path $env:RUNNER_TEMP 'continue_cli_stderr.txt'
+  Remove-Item -ErrorAction SilentlyContinue $outFile, $errFile
 
-  # Stream raw output to the console *and* capture to file/variable
-  Write-Host "::group::Continue CLI raw output"
-  $raw = Get-Content -Raw -Path $tempPromptFile `
-    | & cn --hub $hubArg --config $Config -p - --auto 2>&1 `
-    | Tee-Object -FilePath $tempLog `
-    | Tee-Object -Variable raw
-  Write-Host "::endgroup::"
+  # Call cn WITHOUT stdin/pipes; pass the prompt as a single arg
+  # Note: quoting is handled by PowerShell when you pass as separate args
+  Write-Host "Running Continue CLI..."
+  & cn `
+    --hub $env:CONTINUE_HUB_URL `
+    --config $Config `
+    -p (Get-Content -Raw $tempPromptFile) `
+    --auto `
+      1> $outFile `
+      2> $errFile
+
   $exit = $LASTEXITCODE
+  $stdout = (Test-Path $outFile) ? (Get-Content -Raw $outFile) : ""
+  $stderr = (Test-Path $errFile) ? (Get-Content -Raw $errFile) : ""
 
-  # Normalize $raw to string
-  $rawText = ($raw -is [array]) ? ($raw -join "`n") : [string]$raw
-  $rawText | Set-Content -Path $tempLog -Encoding UTF8 -NoNewline
+  # Continue CLI often writes its own raw log here; show users where to look
+  $contRaw = Join-Path $env:RUNNER_TEMP 'continue_cli_raw.log'
+  if (Test-Path $contRaw) {
+    Write-Host ("Continue raw log: " + $contRaw)
+  }
 
   if ($exit -ne 0) {
-    $rawText = (Test-Path $tempLog) ? (Get-Content -Raw -Path $tempLog) : $rawText
-
-    # Show the last 200 lines inline for quick debugging
-    $tail = ($rawText -split "`r?`n")
-    if ($tail.Count -gt 200) { $tail = $tail[(-200)..(-1)] }
-    $tailJoined = ($tail -join "`n")
-    Write-Host "::group::Continue CLI (last 200 lines)"
-    Write-Host $tailJoined
-    Write-Host "::endgroup::"
-
+    # Try to parse structured JSON error if present; otherwise surface stderr + log path
     try {
-      $err = $rawText | ConvertFrom-Json -ErrorAction Stop
-      if ($err.status -and $err.message) {
-        throw ("Continue CLI failed (exit {0}): {1}: {2}" -f $exit, $err.status, $err.message)
+      $errJson = $stdout | ConvertFrom-Json -ErrorAction Stop
+      if ($errJson.status -and $errJson.message) {
+        throw ("Continue CLI failed (exit {0}): {1}: {2}" -f $exit, $errJson.status, $errJson.message)
       }
     } catch { }
 
-    throw ("Continue CLI failed (exit {0}). Full raw log: {1}" -f $exit, $tempLog)
+    # Tail helpful info
+    $tail = ($stdout + "`n" + $stderr) -split "`r?`n"
+    if ($tail.Count -gt 200) { $tail = $tail[(-200)..(-1)] }
+    Write-Host "::group::Continue CLI (last 200 lines)"
+    Write-Host ($tail -join "`n")
+    Write-Host "::endgroup::"
+
+    $hint = (Test-Path $contRaw) ? " Full raw log: $contRaw" : ""
+    throw ("Continue CLI failed (exit {0}).{1}" -f $exit, $hint)
   }
 
-  return Get-JsonFromText -Text $rawText
+  # Extract JSON from model output (same logic you had, but run on $stdout)
+  return Get-JsonFromText -Text $stdout
 }
 
 
