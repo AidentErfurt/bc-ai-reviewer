@@ -392,31 +392,49 @@ function Invoke-ContinueCli {
   $tempPromptFile = Join-Path $env:RUNNER_TEMP 'continue_prompt.txt'
   $Prompt | Set-Content -Path $tempPromptFile -Encoding UTF8
 
-  Write-Host "Running Continue CLI (stdin) ..."
+    Write-Host "Running Continue CLI (stdin) ..."
   $tempLog = Join-Path $env:RUNNER_TEMP 'continue_cli_raw.log'
   # Be explicit about the Hub to avoid any implicit URL resolution issues inside cn.
   $hubArg = $env:CONTINUE_HUB_URL
-  if ([string]::IsNullOrWhiteSpace($hubArg)) {
-    $hubArg = "https://hub.continue.dev"
-  }
+  if ([string]::IsNullOrWhiteSpace($hubArg)) { $hubArg = "https://hub.continue.dev" }
+
+  # Stream raw output to the console *and* capture to file/variable
+  Write-Host "::group::Continue CLI raw output"
   $raw = Get-Content -Raw -Path $tempPromptFile `
-    | & cn --hub $hubArg --config $Config -p - --auto 2>&1
+    | & cn --hub $hubArg --config $Config -p - --auto 2>&1 `
+    | Tee-Object -FilePath $tempLog `
+    | Tee-Object -Variable raw
+  Write-Host "::endgroup::"
   $exit = $LASTEXITCODE
-  ($raw -is [array] ? ($raw -join "`n") : [string]$raw) | Set-Content -Path $tempLog -Encoding UTF8
+
+  # Normalize $raw to string
+  $rawText = ($raw -is [array]) ? ($raw -join "`n") : [string]$raw
+  $rawText | Set-Content -Path $tempLog -Encoding UTF8 -NoNewline
 
   if ($exit -ne 0) {
-    $rawText = Get-Content -Raw -Path $tempLog
+    $rawText = (Test-Path $tempLog) ? (Get-Content -Raw -Path $tempLog) : $rawText
+
+    # Show the last 200 lines inline for quick debugging
+    $tail = ($rawText -split "`r?`n")
+    if ($tail.Count -gt 200) { $tail = $tail[(-200)..(-1)] }
+    $tailJoined = ($tail -join "`n")
+    Write-Host "::group::Continue CLI (last 200 lines)"
+    Write-Host $tailJoined
+    Write-Host "::endgroup::"
+
     try {
       $err = $rawText | ConvertFrom-Json -ErrorAction Stop
       if ($err.status -and $err.message) {
         throw ("Continue CLI failed (exit {0}): {1}: {2}" -f $exit, $err.status, $err.message)
       }
     } catch { }
-    throw ("Continue CLI failed (exit {0}). See raw log at: {1}`n--- RAW START ---`n{2}`n--- RAW END ---" -f $exit, $tempLog, $rawText)
+
+    throw ("Continue CLI failed (exit {0}). Full raw log: {1}" -f $exit, $tempLog)
   }
 
-  return Get-JsonFromText -Text ($raw -is [array] ? ($raw -join "`n") : [string]$raw)
+  return Get-JsonFromText -Text $rawText
 }
+
 
 # ---------- Execute ----------
 $promptText = Get-Content $tempPrompt -Raw
