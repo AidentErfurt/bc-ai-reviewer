@@ -290,8 +290,37 @@ if ($LogPrompt) {
 }
 
 ############################################################################
-# PowerShell-only Continue runner (slug-only; no URL conversion, extra debug)
+# Continue runner (single impl) — slug-only, no URL rewriting, stable Hub base
 ############################################################################
+# ---------- Resolve config (slug or local file) ----------
+$cfgRaw = if ($env:CONTINUE_CONFIG) { $env:CONTINUE_CONFIG } else { "continuedev/review-bot" }
+
+if ($cfgRaw -match '^\s*https?://') {
+  throw "CONTINUE_CONFIG must be a slug like 'owner/package' or a local path. Got URL: '$cfgRaw'"
+}
+
+$cfgIsFile = Test-Path -LiteralPath $cfgRaw
+if (-not $cfgIsFile -and ($cfgRaw -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')) {
+  throw "Invalid CONTINUE_CONFIG. Expected 'owner/package' or a local config file. Got: '$cfgRaw'"
+}
+$cfg = $cfgRaw  # keep slug/file exactly as given
+
+# Workaround for cn 1.5.11 default-hub regression:
+if (-not $env:CONTINUE_HUB_URL -or [string]::IsNullOrWhiteSpace($env:CONTINUE_HUB_URL)) {
+  $env:CONTINUE_HUB_URL = "https://hub.continue.dev"
+}
+
+# Warn about empty URL-like envs that can cause 401 "Invalid URL" downstream
+$badVars = @()
+[Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object {
+  $k = $_.Key; $v = [string]$_.Value
+  if ($k -match '(BASE_URL|ENDPOINT)' -and [string]::IsNullOrWhiteSpace($v)) { $badVars += $k }
+}
+if ($badVars.Count -gt 0) {
+  Write-Warning ("Empty URL-like environment variables detected: {0}" -f ($badVars -join ', '))
+}
+
+# ---------- Helpers ----------
 function Get-JsonFromText {
   param([Parameter(Mandatory)][string]$Text)
   $clean = $Text.Trim()
@@ -299,9 +328,7 @@ function Get-JsonFromText {
   $clean = $clean -replace '^\s*```\s*', ''
   $clean = $clean -replace '\s*```\s*$', ''
   $clean = $clean -replace '\\(?!["\\/bfnrtu])','\\'
-  try {
-    return $clean | ConvertFrom-Json -ErrorAction Stop
-  } catch {
+  try { return $clean | ConvertFrom-Json -ErrorAction Stop } catch {
     $m = [regex]::Match($clean, '{[\s\S]*}')
     if ($m.Success) {
       $frag = $m.Value -replace '\\(?!["\\/bfnrtu])','\\'
@@ -311,101 +338,14 @@ function Get-JsonFromText {
   }
 }
 
-function Assert-ContinueSlug {
-  param([Parameter(Mandatory)][string]$Value)
-  if ($Value -match '^(https?)://') {
-    throw "CONTINUE_CONFIG must be a slug ('owner/package'), not a URL. Got: $Value"
-  }
-  if ($Value -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
-    throw "Invalid CONTINUE_CONFIG format. Expected 'owner/package'. Got: $Value"
-  }
-  return $Value
-}
-
+# ---------- Single CLI runner (stdin feed; no slug->URL conversion) ----------
 function Invoke-ContinueCli {
   param(
-    [Parameter(Mandatory)][string]$Slug,
+    [Parameter(Mandatory)][string]$Config,  # slug or local file
     [Parameter(Mandatory)][string]$Prompt
   )
-  # Hard set noisy logging if you want, or honor existing
   if (-not $env:CONTINUE_LOG_LEVEL) { $env:CONTINUE_LOG_LEVEL = "debug" }
 
-  Write-Host "::group::Continue CLI environment"
-  try { Write-Host "cn --version:`n$(& cn --version 2>&1)" } catch { Write-Host "cn --version failed: $($_.Exception.Message)" }
-  Write-Host "CONTINUE_CONFIG (raw/slug): $Slug"
-  if ($env:CONTINUE_HUB_URL) { Write-Host "CONTINUE_HUB_URL: $env:CONTINUE_HUB_URL" } else { Write-Host "CONTINUE_HUB_URL: [not set]" }
-  Write-Host "CONTINUE_API_KEY: " + ($(if ($env:CONTINUE_API_KEY) { "[set]" } else { "[missing]" }))
-  Write-Host "::endgroup::"
-
-  # Write prompt to a temp file (don’t echo it)
-  $tempPromptFile = Join-Path $env:RUNNER_TEMP 'continue_prompt.txt'
-  $Prompt | Set-Content -Path $tempPromptFile -Encoding UTF8
-  $promptArg = Get-Content -Raw -Path $tempPromptFile
-
-  Write-Host "Running Continue CLI (argument-passed prompt) ..."
-  $psi = [System.Diagnostics.ProcessStartInfo]::new()
-  $psi.FileName = 'cn'
-  $psi.UseShellExecute = $false
-  $psi.RedirectStandardOutput = $true
-  $psi.RedirectStandardError  = $true
-
-  $null = $psi.ArgumentList.Add('--config')
-  $null = $psi.ArgumentList.Add($Slug)            # IMPORTANT: slug only
-  $null = $psi.ArgumentList.Add('-p')
-  $null = $psi.ArgumentList.Add($promptArg)
-  $null = $psi.ArgumentList.Add('--auto')
-
-  $p = [System.Diagnostics.Process]::new()
-  $p.StartInfo = $psi
-  [void]$p.Start()
-  $stdOut = $p.StandardOutput.ReadToEnd()
-  $stdErr = $p.StandardError.ReadToEnd()
-  $p.WaitForExit()
-
-  if ($p.ExitCode -ne 0) {
-    $snippet = ($stdErr + "`n" + $stdOut)
-    if ($snippet.Length -gt 4000) { $snippet = $snippet.Substring(0,4000) + "`n...[truncated]..." }
-    throw ("Continue CLI failed (exit {0}):`n{1}" -f $p.ExitCode, $snippet)
-  }
-
-  $combined = if ([string]::IsNullOrWhiteSpace($stdOut)) { $stdErr } else { $stdOut }
-  return Get-JsonFromText -Text $combined
-}
-
-# ---------- Resolve config (Hub slug or local) ----------
-# Accept only "owner/package" or a local file path. Never rewrite to a URL.
-$cfgRaw = if ($env:CONTINUE_CONFIG) { $env:CONTINUE_CONFIG } else { "continuedev/review-bot" }
-
-# Fail fast if someone passed a URL.
-if ($cfgRaw -match '^\s*https?://') {
-  throw "CONTINUE_CONFIG must be a slug like 'owner/package' or a local path. Got URL: '$cfgRaw'"
-}
-
-# Allow local file path (.json/.yaml/.yml) or slug owner/package
-$cfgIsFile = Test-Path -LiteralPath $cfgRaw
-if (-not $cfgIsFile -and ($cfgRaw -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')) {
-  throw "Invalid CONTINUE_CONFIG. Expected 'owner/package' or a local config file. Got: '$cfgRaw'"
-}
-
-$cfg = $cfgRaw  # keep exactly as given
-
-# Optional: honor CONTINUE_HUB_URL only if explicitly set by the workflow/user
-# (We do NOT invent one. The CLI's default is the public Hub.)
-if ($env:CONTINUE_HUB_URL) {
-  Write-Host "Using CONTINUE_HUB_URL (user-provided): $($env:CONTINUE_HUB_URL)"
-}
-
-# ---------- Enhanced CLI runner with detailed logging ----------
-function Invoke-ContinueCli {
-  param(
-    [Parameter(Mandatory)][string]$Config,
-    [Parameter(Mandatory)][string]$Prompt
-  )
-
-  # Verbose logging to help debug Hub/assistant issues
-  if (-not $env:CONTINUE_LOG_LEVEL) { $env:CONTINUE_LOG_LEVEL = "debug" }
-
-  # Preflight: show exactly what cn will see (without secrets)
   Write-Host "::group::Continue CLI environment"
   try {
     $cnVer = (& cn --version) 2>&1
@@ -413,48 +353,44 @@ function Invoke-ContinueCli {
     throw "Continue CLI (cn) not found on PATH."
   }
   Write-Host "cn --version:`n$cnVer"
-  Write-Host "CONTINUE_CONFIG (raw): $Config"
-  Write-Host ("CONTINUE_HUB_URL: " + ($(if ($env:CONTINUE_HUB_URL) { $env:CONTINUE_HUB_URL } else { "[not set]" })))
-  Write-Host ("CONTINUE_API_KEY: " + ($(if ($env:CONTINUE_API_KEY) { "[set]" } else { "[not set]" })))
+  Write-Host "CONTINUE_CONFIG (slug/file): $Config"
+  Write-Host ("CONTINUE_HUB_URL: " + $env:CONTINUE_HUB_URL)
+  Write-Host ("CONTINUE_API_KEY: " + ($(if ($env:CONTINUE_API_KEY) { "[set]" } else { "[missing]" })))
   Write-Host "::endgroup::"
 
-  # Write prompt to a temp file and feed via stdin (avoids arg length issues)
+  # Write prompt to a temp file and feed via stdin
   $tempPromptFile = Join-Path $env:RUNNER_TEMP 'continue_prompt.txt'
   $Prompt | Set-Content -Path $tempPromptFile -Encoding UTF8
 
-  Write-Host "Running Continue CLI (argument-passed prompt) ..."
-  # Capture combined stdout/stderr; also tee to a temp log for postmortem
+  Write-Host "Running Continue CLI (stdin) ..."
   $tempLog = Join-Path $env:RUNNER_TEMP 'continue_cli_raw.log'
-  $raw = Get-Content -Raw -Path $tempPromptFile |
-         & cn --config $Config -p - --auto 2>&1
+  $raw = Get-Content -Raw -Path $tempPromptFile | & cn --config $Config -p - --auto 2>&1
   $exit = $LASTEXITCODE
   ($raw -is [array] ? ($raw -join "`n") : [string]$raw) | Set-Content -Path $tempLog -Encoding UTF8
 
   if ($exit -ne 0) {
-    # Try to surface any structured error JSON the CLI produced
     $rawText = Get-Content -Raw -Path $tempLog
-    $errJson = $null
-    try { $errJson = $rawText | ConvertFrom-Json -ErrorAction Stop } catch {}
-    if ($errJson -and $errJson.status -and $errJson.message) {
-      throw ("Continue CLI failed (exit {0}): {1}: {2}" -f $exit, $errJson.status, $errJson.message)
-    } else {
-      throw ("Continue CLI failed (exit {0}). See raw log at: {1}`n--- RAW START ---`n{2}`n--- RAW END ---" -f $exit, $tempLog, $rawText)
-    }
+    try {
+      $err = $rawText | ConvertFrom-Json -ErrorAction Stop
+      if ($err.status -and $err.message) {
+        throw ("Continue CLI failed (exit {0}): {1}: {2}" -f $exit, $err.status, $err.message)
+      }
+    } catch { }
+    throw ("Continue CLI failed (exit {0}). See raw log at: {1}`n--- RAW START ---`n{2}`n--- RAW END ---" -f $exit, $tempLog, $rawText)
   }
 
-  # Parse the model's JSON
   return Get-JsonFromText -Text ($raw -is [array] ? ($raw -join "`n") : [string]$raw)
 }
 
-# ---------- Use the resolved $cfg ----------
+# ---------- Execute ----------
 $promptText = Get-Content $tempPrompt -Raw
-Write-Host "Resolved CONTINUE_CONFIG slug: '$cfg'"
-
+Write-Host "Resolved CONTINUE_CONFIG slug/file: '$cfg'"
 try {
   $review = Invoke-ContinueCli -Config $cfg -Prompt $promptText
 } catch {
   throw "Continue run failed: $($_.Exception.Message)"
 }
+
 
 ############################################################################
 # Post summary as a safe, standalone review first
