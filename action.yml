@@ -118,6 +118,7 @@ runs:
       env:
         CONTINUE_API_KEY: ${{ secrets.CONTINUE_API_KEY }}
         CONTINUE_LOG_LEVEL: debug
+      shell: bash
       run: |
         set -euxo pipefail
         mkdir -p .continue-logs
