@@ -318,6 +318,7 @@ function Invoke-ContinueCli {
     [Parameter(Mandatory)][string]$Config,
     [Parameter(Mandatory)][string]$Prompt
   )
+  $env:CONTINUE_LOG_LEVEL = "debug"
 
   # Prefer feeding the prompt via stdin to avoid argument-length and quoting issues.
   $tempPromptFile = Join-Path $env:RUNNER_TEMP 'continue_prompt.txt'
