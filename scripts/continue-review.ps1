@@ -398,6 +398,10 @@ function Invoke-ContinueCli {
   # Call cn WITHOUT stdin/pipes; pass the prompt as a single arg
   # Note: quoting is handled by PowerShell when you pass as separate args
   Write-Host "Running Continue CLI..."
+
+  & cn --config continuedev/review-bot --auto -p "Return ONLY the string OK"
+
+
   & cn `
     --hub $env:CONTINUE_HUB_URL `
     --config $Config `
