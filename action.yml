@@ -97,8 +97,9 @@ runs:
         node-version: 20
 
     - name: Install helpers (parse-diff) & Continue CLI
-      shell: bash
-      run: |
+      shell: pwsh
+      working-directory: ${{ github.action_path }}
+      run: |      
         npm install --no-save parse-diff@latest
         npm i -g @continuedev/cli
 
