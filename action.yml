@@ -109,29 +109,30 @@ runs:
         curl -LsSf https://astral.sh/uv/install.sh | sh || true
         echo "$HOME/.local/bin" >> $GITHUB_PATH || true
 
-    - name: Run AI Code Review (Continue + MCP)
-      shell: pwsh
-      env:
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        GITHUB_EVENT_PATH: ${{ github.event_path }}
-        CONTINUE_API_KEY: ${{ inputs.CONTINUE_API_KEY }}
-        CONTINUE_CONFIG: ${{ inputs.CONTINUE_CONFIG }}
-      run: |
-        . '${{ github.action_path }}/scripts/continue-review.ps1'
-        $p = @{
-          GitHubToken                  = '${{ inputs.GITHUB_TOKEN }}'
-          MaxComments                  = [int]'${{ inputs.MAX_COMMENTS }}'
-          ProjectContext               = '${{ inputs.PROJECT_CONTEXT }}'
-          ContextFiles                 = '${{ inputs.CONTEXT_FILES }}'
-          IncludePatterns              = '${{ inputs.INCLUDE_PATTERNS }}'
-          ExcludePatterns              = '${{ inputs.EXCLUDE_PATTERNS }}'
-          IssueCount                   = [int]'${{ inputs.ISSUE_COUNT }}'
-          FetchClosedIssues            = [bool]::Parse('${{ inputs.FETCH_CLOSED_ISSUES }}')
-          AutoDetectApps               = [bool]::Parse('${{ inputs.AUTO_DETECT_APPS }}')
-          IncludeAppPermissions        = [bool]::Parse('${{ inputs.INCLUDE_APP_PERMISSIONS }}')
-          IncludeAppMarkdown           = [bool]::Parse('${{ inputs.INCLUDE_APP_MARKDOWN }}')
-          BasePromptExtra              = '${{ inputs.BASE_PROMPT_EXTRA }}'
-          LogPrompt                    = [switch]::new([bool]::Parse('${{ inputs.LOG_PROMPT }}'))
-        }
-        if ('${{ inputs.APPROVE_REVIEWS }}' -eq 'true') { $p.ApproveReviews = $true }
-        Invoke-BCContinueReview @p
+- name: Run AI Code Review (Continue + MCP)
+  shell: pwsh
+  env:
+    # Continue config may launch MCP servers that look for these env vars.
+    GITHUB_TOKEN:                 ${{ inputs.GITHUB_TOKEN || github.token }}
+    GITHUB_PERSONAL_ACCESS_TOKEN: ${{ inputs.GITHUB_TOKEN || github.token }}
+    CONTINUE_API_KEY:             ${{ inputs.CONTINUE_API_KEY }}
+    CONTINUE_CONFIG:              ${{ inputs.CONTINUE_CONFIG }}
+  run: |
+    $params = @{
+      GitHubToken           = "${{ inputs.GITHUB_TOKEN || github.token }}"
+      MaxComments           = [int]"${{ inputs.MAX_COMMENTS }}"
+      ProjectContext        = "${{ inputs.PROJECT_CONTEXT }}"
+      ContextFiles          = "${{ inputs.CONTEXT_FILES }}"
+      IncludePatterns       = "${{ inputs.INCLUDE_PATTERNS }}"
+      ExcludePatterns       = "${{ inputs.EXCLUDE_PATTERNS }}"
+      IssueCount            = [int]"${{ inputs.ISSUE_COUNT }}"
+      FetchClosedIssues     = [bool]::Parse("${{ inputs.FETCH_CLOSED_ISSUES }}")
+      AutoDetectApps        = [bool]::Parse("${{ inputs.AUTO_DETECT_APPS }}")
+      IncludeAppPermissions = [bool]::Parse("${{ inputs.INCLUDE_APP_PERMISSIONS }}")
+      IncludeAppMarkdown    = [bool]::Parse("${{ inputs.INCLUDE_APP_MARKDOWN }}")
+      BasePromptExtra       = "${{ inputs.BASE_PROMPT_EXTRA }}"
+    }
+    if ("${{ inputs.APPROVE_REVIEWS }}" -eq "true") { $params.ApproveReviews = $true }
+    if ("${{ inputs.LOG_PROMPT }}" -eq "true")      { $params.LogPrompt      = $true }
+
+    & "${{ github.action_path }}/scripts/continue-review.ps1" @params
