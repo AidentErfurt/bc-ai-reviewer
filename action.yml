@@ -114,6 +114,24 @@ runs:
         curl -LsSf https://astral.sh/uv/install.sh | sh || true
         echo "$HOME/.local/bin" >> $GITHUB_PATH || true
 
+    - name: Run cn (super simple)
+      env:
+        CONTINUE_API_KEY: ${{ secrets.CONTINUE_API_KEY }}
+        CONTINUE_LOG_LEVEL: debug
+      run: |
+        set -euxo pipefail
+        mkdir -p .continue-logs
+        # Use `script` to force a PTY; some CLIs only flush when attached to a TTY.
+        script -q -e -c \
+          'cn --config continuedev/review-bot --auto -p "Return ONLY the string OK"' \
+          .continue-logs/cn.tty.log
+        # Also capture raw stdout/stderr via redirection (no TTY) for comparison
+        stdbuf -oL -eL cn --config continuedev/review-bot --auto \
+          -p "Return ONLY the string OK" \
+          > .continue-logs/cn.stdout.txt 2> .continue-logs/cn.stderr.txt || echo "exit=$?" >> .continue-logs/cn.stderr.txt
+        echo "---- STDOUT ----"; cat .continue-logs/cn.stdout.txt || true
+        echo "---- STDERR ----"; cat .continue-logs/cn.stderr.txt || true
+
     - name: Run AI Code Review (Continue + MCP)
       shell: pwsh
       env:
