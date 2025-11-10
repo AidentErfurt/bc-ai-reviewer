@@ -141,3 +141,15 @@ runs:
         if ("${{ inputs.LOG_PROMPT }}" -eq "true")      { $params.LogPrompt      = $true }
 
         & "${{ github.action_path }}/scripts/continue-review.ps1" @params
+
+    - name: Upload Continue logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: continue-cli-logs
+        path: |
+          .continue-logs/continue_cli_raw.log
+          .continue-logs/continue_cli_stdout.txt
+          .continue-logs/continue_cli_stderr.txt
+        if-no-files-found: warn
+        retention-days: 7

@@ -406,6 +406,31 @@ function Invoke-ContinueCli {
       1> $outFile `
       2> $errFile
 
+    # Known log locations
+    $runTemp = $env:RUNNER_TEMP
+    $contRaw = Join-Path $runTemp 'continue_cli_raw.log'
+    $cnStdout = Join-Path $runTemp 'continue_cli_stdout.txt'
+    $cnStderr = Join-Path $runTemp 'continue_cli_stderr.txt'
+
+    # Also copy to workspace so upload-artifact (next step) can pick them up
+    $logDir = Join-Path $env:GITHUB_WORKSPACE '.continue-logs'
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+    $copied = @()
+    foreach ($p in @($contRaw, $cnStdout, $cnStderr)) {
+    if (Test-Path $p) {
+        Copy-Item $p -Destination (Join-Path $logDir (Split-Path $p -Leaf)) -Force
+        $copied += (Join-Path $logDir (Split-Path $p -Leaf))
+    }
+    }
+
+    # Print where the logs are for convenience
+    if ($copied.Count -gt 0) {
+    Write-Host ("Logs copied for upload: " + ($copied -join ', '))
+    } else {
+    Write-Warning "No Continue logs were found to copy."
+    }
+
   $exit = $LASTEXITCODE
   $stdout = (Test-Path $outFile) ? (Get-Content -Raw $outFile) : ""
   $stderr = (Test-Path $errFile) ? (Get-Content -Raw $errFile) : ""
