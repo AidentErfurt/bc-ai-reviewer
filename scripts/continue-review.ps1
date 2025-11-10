@@ -399,7 +399,7 @@ function Invoke-ContinueCli {
   # Note: quoting is handled by PowerShell when you pass as separate args
   Write-Host "Running Continue CLI (DEBUG)..."
 
-  & cn --config aident/al-review-bot --auto -p "Return ONLY the string OK" --config $Config
+  & cn --config aident/al-review-bot --auto -p "Return ONLY the string OK" --config $Config --verbose
 
 
 #   & cn `
