@@ -1,4 +1,4 @@
-<# 
+<#
   Continue + MCP PR reviewer for Business Central AL
 
   Key differences vs. v1:
@@ -109,7 +109,13 @@ $js = Join-Path $PSScriptRoot 'parse-diff.js'
 if (-not (Test-Path $js)) {
   @'
 const fs = require("fs");
-const parse = require("parse-diff");
+let parse;
+try { parse = require("parse-diff"); }
+catch {
+  const { createRequire } = require("module");
+  const cwdRequire = createRequire(process.cwd() + "/");
+  parse = cwdRequire("parse-diff");
+}
 let buf = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", c => buf += c);
@@ -230,14 +236,16 @@ Output **only this JSON** (no fences):
 {
   "summary": "Markdown summary for the PR (positives, risks, key findings, actionable next steps).",
   "comments": [
-    { "path": "path/in/repo.al", "line": 123, "body": "Short remark followed by a ```suggestion\n...replacement...\n``` block when appropriate." }
+    { "path": "path/in/repo.al", "line": 123, "body": "Short remark followed by a ```suggestion
+...replacement...
+``` block when appropriate." }
   ],
   "suggestedAction": "approve" | "request_changes" | "comment",
   "confidence": 0.0-1.0
 }
 
 Constraints:
-- Choose `"line"` numbers **only from** the `validLines` table for each file (these are HEAD/RIGHT line numbers from the diff).
+- Choose `" + 'line' + @"` numbers **only from** the `validLines` table for each file (these are HEAD/RIGHT line numbers from the diff).
 - At most $maxInline comments; aggregate overflow into the summary.
 - Keep suggestion replacements small (≤6 lines).
 - Do not reference contextFiles in inline comments; they’re for reasoning only.
@@ -282,28 +290,70 @@ if ($LogPrompt) {
 }
 
 ############################################################################
-# Run Continue CLI (uses CONTINUE_CONFIG & CONTINUE_API_KEY from env)
-# Docs: Code Review bot guide; config & tools (MCP) in Hub/local. 
+# PowerShell-only Continue runner (no bash; safe multi-line args)
 ############################################################################
-$env:CONTINUE_API_KEY = $env:CONTINUE_API_KEY
-$cfg = if ($env:CONTINUE_CONFIG) { $env:CONTINUE_CONFIG } else { "continuedev/review-bot" }
+function Get-JsonFromText {
+  param([Parameter(Mandatory)][string]$Text)
 
-# We request JSON output by contract above
-$outFile = Join-Path $env:RUNNER_TEMP 'continue_output.json'
-$cmd = "cn --config $cfg -p $(Get-Content $tempPrompt -Raw) --auto"
-Write-Host "Running: $cmd"
-$raw = & bash -lc "$cmd" 2>&1
-if ($LASTEXITCODE -ne 0) { throw "Continue CLI failed: $raw" }
+  $clean = $Text.Trim()
+  $clean = $clean -replace '^\s*```json\s*', ''
+  $clean = $clean -replace '^\s*```\s*', ''
+  $clean = $clean -replace '\s*```\s*$', ''
+  $clean = $clean -replace '\\(?!["\\/bfnrtu])','\\'
 
-# Try to peel JSON from the output
-$txt = ($raw | Out-String).Trim()
-$txt = $txt -replace '^```json','' -replace '```$',''
-# sanitize invalid \x escapes
-$txt = $txt -replace '\\(?!["\\/bfnrtu])','\\'
+  try {
+    return $clean | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $m = [regex]::Match($clean, '{[\s\S]*}')
+    if ($m.Success) {
+      $frag = $m.Value -replace '\\(?!["\\/bfnrtu])','\\'
+      try { return $frag | ConvertFrom-Json -ErrorAction Stop } catch {}
+    }
+    throw "Could not parse JSON from model output.`n--- Raw start ---`n$Text`n--- Raw end ---"
+  }
+}
+
+function Invoke-ContinueCli {
+  param(
+    [Parameter(Mandatory)][string]$Config,
+    [Parameter(Mandatory)][string]$Prompt
+  )
+
+  $stdoutPath = Join-Path $env:RUNNER_TEMP 'continue_stdout.txt'
+  $stderrPath = Join-Path $env:RUNNER_TEMP 'continue_stderr.txt'
+  New-Item -ItemType File -Force -Path $stdoutPath | Out-Null
+  New-Item -ItemType File -Force -Path $stderrPath | Out-Null
+
+  $argList = @('--config', $Config, '-p', $Prompt, '--auto')
+
+  Write-Host "Running Continue CLI (args array) ..."
+  $proc = Start-Process -FilePath 'cn' `
+                        -ArgumentList $argList `
+                        -NoNewWindow `
+                        -PassThru `
+                        -RedirectStandardOutput $stdoutPath `
+                        -RedirectStandardError  $stderrPath
+  $proc.WaitForExit()
+
+  $stdout = Get-Content $stdoutPath -Raw
+  $stderr = Get-Content $stderrPath -Raw
+  if ($proc.ExitCode -ne 0) {
+    throw ("Continue CLI failed (exit {0}):`n{1}`n--- STDERR ---`n{2}" -f $proc.ExitCode, $stdout, $stderr)
+  }
+
+  $combined = if ($stdout.Trim()) { $stdout } else { $stderr }
+  return Get-JsonFromText -Text $combined
+}
+
+# Resolve config (Hub slug or local)
+$cfg        = if ($env:CONTINUE_CONFIG) { $env:CONTINUE_CONFIG } else { "continuedev/review-bot" }
+$promptText = Get-Content $tempPrompt -Raw
+
+# Run Continue and parse JSON result
 try {
-  $review = $txt | ConvertFrom-Json -ErrorAction Stop
+  $review = Invoke-ContinueCli -Config $cfg -Prompt $promptText
 } catch {
-  throw "Could not parse Continue output as JSON:`n$txt"
+  throw "Continue run failed: $($_.Exception.Message)"
 }
 
 ############################################################################
