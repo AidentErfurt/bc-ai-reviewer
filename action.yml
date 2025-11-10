@@ -96,11 +96,15 @@ runs:
       with:
         node-version: 20
 
-    - name: Install helpers (parse-diff) & Continue CLI
+    - name: Install helpers parse-diff
       shell: pwsh
       working-directory: ${{ github.action_path }}
       run: |      
         npm install --no-save parse-diff@latest
+
+    - name: Install Continue CLI
+      shell: pwsh
+      run: |      
         npm i -g @continuedev/cli
 
     # (Optional) Install uv so Serena MCP can be launched by Continue if your config uses uvx
