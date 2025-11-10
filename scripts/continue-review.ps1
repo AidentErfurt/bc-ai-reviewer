@@ -319,31 +319,25 @@ function Invoke-ContinueCli {
     [Parameter(Mandatory)][string]$Prompt
   )
 
-  $stdoutPath = Join-Path $env:RUNNER_TEMP 'continue_stdout.txt'
-  $stderrPath = Join-Path $env:RUNNER_TEMP 'continue_stderr.txt'
-  New-Item -ItemType File -Force -Path $stdoutPath | Out-Null
-  New-Item -ItemType File -Force -Path $stderrPath | Out-Null
+  # Prefer feeding the prompt via stdin to avoid argument-length and quoting issues.
+  $tempPromptFile = Join-Path $env:RUNNER_TEMP 'continue_prompt.txt'
+  # Ensure prompt file exists (Prompt may be long); write it to temp file
+  $Prompt | Set-Content -Path $tempPromptFile -Encoding UTF8
 
-  $argList = @('--config', $Config, '-p', $Prompt, '--auto')
+  Write-Host "Running Continue CLI (feeding prompt via stdin) ..."
+  # Pipe the prompt into cn via stdin; capture combined stdout/stderr
+  $procOutput = Get-Content -Raw -Path $tempPromptFile | & cn --config $Config -p - --auto 2>&1
+  $exit = $LASTEXITCODE
 
-  Write-Host "Running Continue CLI (args array) ..."
-  $proc = Start-Process -FilePath 'cn' `
-                        -ArgumentList $argList `
-                        -NoNewWindow `
-                        -PassThru `
-                        -RedirectStandardOutput $stdoutPath `
-                        -RedirectStandardError  $stderrPath
-  $proc.WaitForExit()
+  $outText = if ($procOutput -is [System.Array]) { ($procOutput -join "`n") } else { [string]$procOutput }
 
-  $stdout = Get-Content $stdoutPath -Raw
-  $stderr = Get-Content $stderrPath -Raw
-  if ($proc.ExitCode -ne 0) {
-    throw ("Continue CLI failed (exit {0}):`n{1}`n--- STDERR ---`n{2}" -f $proc.ExitCode, $stdout, $stderr)
+  if ($exit -ne 0) {
+    throw ("Continue CLI failed (exit {0}):`n{1}" -f $exit, $outText)
   }
 
-  $combined = if ($stdout.Trim()) { $stdout } else { $stderr }
-  return Get-JsonFromText -Text $combined
+  return Get-JsonFromText -Text $outText
 }
+
 
 # Resolve config (Hub slug or local)
 $cfg        = if ($env:CONTINUE_CONFIG) { $env:CONTINUE_CONFIG } else { "continuedev/review-bot" }
