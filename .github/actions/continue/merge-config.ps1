@@ -7,8 +7,8 @@
   - Writes merged config to --out <path>
 
 Usage (from GitHub Actions step, shell: pwsh):
-  $env:MODELS_BLOCK = \"${{ inputs.MODELS_BLOCK }}\"
-  & \"${{ github.action_path }}/.github/actions/continue/merge-config.ps1\" --out $mergeOut
+  $env:MODELS_BLOCK = "${{ inputs.MODELS_BLOCK }}"
+  & "${{ github.action_path }}/.github/actions/continue/merge-config.ps1" --out $mergeOut
 #>
 
 param(
@@ -17,7 +17,7 @@ param(
 
 function UsageAndExit([string]$msg) {
   if ($msg) { Write-Error $msg }
-  Write-Host \"Usage: merge-config.ps1 --out /path/to/out.yaml\"
+  Write-Host "Usage: merge-config.ps1 --out /path/to/out.yaml"
   exit 1
 }
 
@@ -27,14 +27,14 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $defaultCfgPath = Join-Path $scriptDir 'default-config.yaml'
 
 if (-not (Test-Path $defaultCfgPath)) {
-  Write-Error \"default-config.yaml not found at $defaultCfgPath\"
+  Write-Error "default-config.yaml not found at $defaultCfgPath"
   exit 2
 }
 
 try {
   $defaultText = Get-Content -Raw -Path $defaultCfgPath -ErrorAction Stop
 } catch {
-  Write-Error \"Failed reading default-config.yaml: $_\"
+  Write-Error "Failed reading default-config.yaml: $_"
   exit 3
 }
 
@@ -43,10 +43,10 @@ if (-not $modelsBlock -or $modelsBlock.Trim().Length -eq 0) {
   # No replacement requested — copy default config
   try {
     Set-Content -Path $out -Value $defaultText -Encoding UTF8
-    Write-Host \"Wrote default config to $out\"
+    Write-Host "Wrote default config to $out"
     exit 0
   } catch {
-    Write-Error \"Failed to write output file: $_\"
+    Write-Error "Failed to write output file: $_"
     exit 4
   }
 }
@@ -58,12 +58,12 @@ $mb = $modelsBlock.Trim()
 # wrap it under a models: key.
 if (-not ($mb -match '(?m)^\s*models:\s*')) {
   if ($mb.TrimStart().StartsWith('-')) {
-    $mb = \"models:`n\" + $mb
+    $mb = "models:`n" + $mb
   } else {
     # indent the block under models:
-    $lines = $mb -split \"`n\"
-    $indented = ($lines | ForEach-Object { \"  $_\" }) -join \"`n\"
-    $mb = \"models:`n\" + $indented
+    $lines = $mb -split "`n"
+    $indented = ($lines | ForEach-Object { "  $_" }) -join "`n"
+    $mb = "models:`n" + $indented
   }
 }
 
@@ -89,14 +89,14 @@ $modelsStartRegex = '(?m)^[ \t]*models:\s*$'
 $startMatch = [regex]::Match($defaultText, $modelsStartRegex)
 if (-not $startMatch.Success) {
   # No models key — append
-  $outText = $defaultText.TrimEnd() + \"`n`n\" + $mb.Trim() + \"`n\"
+  $outText = $defaultText.TrimEnd() + "`n`n" + $mb.Trim() + "`n"
   $outText = SubstitutePlaceholders $outText
   try {
     Set-Content -Path $out -Value $outText -Encoding UTF8
-    Write-Host \"Appended models block to default config and wrote to $out\"
+    Write-Host "Appended models block to default config and wrote to $out"
     exit 0
   } catch {
-    Write-Error \"Failed to write output file: $_\"
+    Write-Error "Failed to write output file: $_"
     exit 5
   }
 }
@@ -128,17 +128,17 @@ if ($null -eq $endIndex) {
 $before = $defaultText.Substring(0, $startIndex)
 $remainder = $defaultText.Substring($endIndex)
 
-$outText = $before.TrimEnd() + \"`n`n\" + $mb.Trim() + \"`n`n\" + $remainder.TrimStart() + \"`n\"
+$outText = $before.TrimEnd() + "`n`n" + $mb.Trim() + "`n`n" + $remainder.TrimStart() + "`n"
 
 # Substitute placeholders in the whole file too (in case other placeholders exist)
 $outText = SubstitutePlaceholders $outText
 
 try {
   Set-Content -Path $out -Value $outText -Encoding UTF8
-  Write-Host \"Wrote merged config with replacement models block to $out\"
+  Write-Host "Wrote merged config with replacement models block to $out"
   exit 0
 } catch {
-  Write-Error \"Failed to write output file: $_\"
+  Write-Error "Failed to write output file: $_"
   exit 6
 }
 "
