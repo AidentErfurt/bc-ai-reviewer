@@ -377,11 +377,12 @@ function Invoke-ContinueCli {
 
   Write-Host "Running Continue CLI..."
 
-  # Invoke Continue CLI and capture its output. Do not try to copy or parse raw logs separately;
-  # let the CLI emit its own logs to the runner. If it exits non-zero, surface a simple error.
-  $cnOutput = & cn --config $Config -p (Get-Content -Raw $tempPromptFile) --auto 2>&1
+    # Invoke Continue CLI and stream output to runner while saving to a temp file for parsing
+  $tempCnOut = Join-Path $env:RUNNER_TEMP 'continue_cn_out.log'
+  # Use Tee-Object so cn's output is both printed to the runner log and written to a file
+  & cn --config $Config -p (Get-Content -Raw $tempPromptFile) --auto 2>&1 | Tee-Object -FilePath $tempCnOut
   $exit = $LASTEXITCODE
-  $stdout = ($cnOutput -join "`n")
+  $stdout = if (Test-Path $tempCnOut) { Get-Content -Raw $tempCnOut } else { "" }
 
   if ($exit -ne 0) {
     throw ("Continue CLI failed (exit {0})." -f $exit)
