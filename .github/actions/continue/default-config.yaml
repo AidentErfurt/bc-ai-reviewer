@@ -46,7 +46,3 @@ rules:
 prompts:
   - uses: file://.continue/prompts/review-pr.md
 
-# Empty placeholders so other tools/hub imports can be added safely.
-docs: {}
-mcpServers: {}
-data: {}
