@@ -1,4 +1,4 @@
-# PowerShell .github/actions/continue/merge-config.ps1
+﻿# PowerShell .github/actions/continue/merge-config.ps1
 <#
   Merge helper (PowerShell)
   - Reads default-config.yaml shipped with the action
@@ -7,7 +7,8 @@
   - Writes merged config to --out <path>
 
 Usage (from GitHub Actions step, shell: pwsh):
-  $env:MODELS_BLOCK = "${{ inputs.MODELS_BLOCK }}"
+  $env:MODELS_BLOCK = "${{ inputs.MODELS_BLOCK }}
+
   & "${{ github.action_path }}/.github/actions/continue/merge-config.ps1" --out $mergeOut
 #>
 
@@ -40,7 +41,7 @@ try {
 
 $modelsBlock = $env:MODELS_BLOCK
 if (-not $modelsBlock -or $modelsBlock.Trim().Length -eq 0) {
-  # No replacement requested — copy default config
+  # No replacement requested â€” copy default config
   try {
     Set-Content -Path $out -Value $defaultText -Encoding UTF8
     Write-Host "Wrote default config to $out"
@@ -61,7 +62,7 @@ if (-not ($mb -match '(?m)^\s*models:\s*')) {
     $mb = "models:`n" + $mb
   } else {
     # indent the block under models:
-    $lines = $mb -split "`n"
+    $lines = [regex]::Split($mb, "\r?\n")
     $indented = ($lines | ForEach-Object { "  $_" }) -join "`n"
     $mb = "models:`n" + $indented
   }
@@ -88,7 +89,7 @@ $mb = SubstitutePlaceholders $mb
 $modelsStartRegex = '(?m)^[ \t]*models:\s*$'
 $startMatch = [regex]::Match($defaultText, $modelsStartRegex)
 if (-not $startMatch.Success) {
-  # No models key — append
+  # No models key â€” append
   $outText = $defaultText.TrimEnd() + "`n`n" + $mb.Trim() + "`n"
   $outText = SubstitutePlaceholders $outText
   try {
@@ -141,4 +142,3 @@ try {
   Write-Error "Failed to write output file: $_"
   exit 6
 }
-"
