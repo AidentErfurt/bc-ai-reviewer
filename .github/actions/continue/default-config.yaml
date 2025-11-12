@@ -1,0 +1,50 @@
+name: "continue-default"
+version: "1.0.0"
+schema: v1
+
+# NOTE: This default config intentionally contains NO models. Models must
+# always be supplied via the MODELS_BLOCK input (they are merged into this
+# file at runtime). This file provides the other Continue blocks that are
+# useful for PR/code-review runs (context, rules, prompts, etc.).
+
+# Context configuration used to assemble context for the reviewer.
+context:
+  # Files to include when building local repo context for reviews
+  files:
+    include:
+      - "**/*.al"
+      - "**/*.xlf"
+      - "**/*.json"
+    exclude: []
+
+  # Context providers (recommended for PR review)
+  providers:
+    - provider: diff
+    - provider: repo-map
+      params:
+        includeSignatures: false
+    - provider: currentFile
+    - provider: open
+      params:
+        onlyPinned: true
+    - provider: problems
+    - provider: file
+    - provider: terminal
+
+  # Git diff provider settings: used to fetch PR diffs and hunks
+  gitDiff:
+    enabled: true
+    # Limits to avoid enormous prompts on very large PRs
+    maxFiles: 500
+    maxHunksPerFile: 50
+
+rules:
+  - uses: file://.continue/rules/pr-reviewer.md
+
+prompts:
+  - uses: file://.continue/prompts/review-pr.md
+
+# Empty placeholders so other tools/hub imports can be added safely.
+docs: {}
+mcpServers: {}
+data: {}
