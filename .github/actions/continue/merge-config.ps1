@@ -56,15 +56,31 @@ if (-not $modelsBlock -or $modelsBlock.Trim().Length -eq 0) {
 $mb = $modelsBlock.Trim()
 
 # If user provided a list starting with '-' or a model object without top-level 'models:',
-# wrap it under a models: key.
+# wrap it under a models: key. If the block is a single model mapping (no leading '-'),
+# convert it into a YAML list item so `models:` becomes a sequence of model mappings.
 if (-not ($mb -match '(?m)^\s*models:\s*')) {
   if ($mb.TrimStart().StartsWith('-')) {
+    # Already a YAML sequence of models (each starting with '-'), just prepend models:
     $mb = "models:`n" + $mb
   } else {
-    # indent the block under models:
+    # Convert single model mapping into a list item under models:
     $lines = [regex]::Split($mb, "\r?\n")
-    $indented = ($lines | ForEach-Object { "  $_" }) -join "`n"
-    $mb = "models:`n" + $indented
+    # find first non-empty line index
+    $firstIdx = 0
+    for ($i=0; $i -lt $lines.Length; $i++) {
+      if ($lines[$i].Trim().Length -gt 0) { $firstIdx = $i; break }
+    }
+    # prepend '- ' to the first non-empty line and indent subsequent lines by two spaces
+    $outLines = @()
+    for ($i=0; $i -lt $lines.Length; $i++) {
+      $line = $lines[$i]
+      if ($i -eq $firstIdx) {
+        $outLines += ("- " + $line.TrimStart())
+      } else {
+        $outLines += ("  " + $line)
+      }
+    }
+    $mb = "models:`n" + ($outLines -join "`n")
   }
 }
 
