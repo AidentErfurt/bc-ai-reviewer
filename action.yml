@@ -39,7 +39,7 @@ inputs:
     type: string
     default: ""
 
-    INCLUDE_PATTERNS:
+  INCLUDE_PATTERNS:
     description: "Comma-separated globs to include in review (default: AL files)"
     type: string
     default: "**/*.al"
