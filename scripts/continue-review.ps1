@@ -104,31 +104,9 @@ Write-Host "Reviewing PR #$prNumber in $owner/$repo @ $headSha"
 $patch = Get-PRDiff -Owner $owner -Repo $repo -PrNumber $prNumber
 if (-not $patch) { Write-Host "Empty diff; exiting."; return }
 
-# Ensure helper file exists (we vendor a tiny wrapper)
 $js = Join-Path $PSScriptRoot 'parse-diff.js'
 if (-not (Test-Path $js)) {
-  @'
-const fs = require("fs");
-let parse;
-try { parse = require("parse-diff"); }
-catch {
-  const { createRequire } = require("module");
-  const cwdRequire = createRequire(process.cwd() + "/");
-  parse = cwdRequire("parse-diff");
-}
-let buf = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", c => buf += c);
-process.stdin.on("end", () => {
-  try {
-    const files = parse(buf || "");
-    process.stdout.write(JSON.stringify(files));
-  } catch (e) {
-    console.error(e?.stack || e?.message || String(e));
-    process.exit(1);
-  }
-});
-'@ | Set-Content -Path $js -Encoding UTF8
+  throw "parse-diff helper not found at '$js'. Ensure scripts/parse-diff.js is present in the repository and the action step installs the npm package 'parse-diff' (npm install --no-save parse-diff)."
 }
 
 $pdOut = $patch | node $js 2>&1
@@ -292,23 +270,11 @@ if ($LogPrompt) {
 ############################################################################
 # Continue runner (single impl) — slug-only, no URL rewriting, stable Hub base
 ############################################################################
-# ---------- Resolve config (slug or local file) ----------
-$cfgRaw = if ($env:CONTINUE_CONFIG) { $env:CONTINUE_CONFIG } else { "continuedev/review-bot" }
+# ---------- Resolve merged config file (from composite action) ----------
+$cfgRaw = if ($env:CONTINUE_CONFIG) { $env:CONTINUE_CONFIG } else { throw "CONTINUE_CONFIG not set. The composite action must set CONTINUE_CONFIG to the merged local config path." }
+if (-not (Test-Path -LiteralPath $cfgRaw)) { throw "CONTINUE_CONFIG path not found: '$cfgRaw'" }
+$cfg = $cfgRaw
 
-if ($cfgRaw -match '^\s*https?://') {
-  throw "CONTINUE_CONFIG must be a slug like 'owner/package' or a local path. Got URL: '$cfgRaw'"
-}
-
-$cfgIsFile = Test-Path -LiteralPath $cfgRaw
-if (-not $cfgIsFile -and ($cfgRaw -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')) {
-  throw "Invalid CONTINUE_CONFIG. Expected 'owner/package' or a local config file. Got: '$cfgRaw'"
-}
-$cfg = $cfgRaw  # keep slug/file exactly as given
-
-# Workaround for cn 1.5.11 default-hub regression:
-if (-not $env:CONTINUE_HUB_URL -or [string]::IsNullOrWhiteSpace($env:CONTINUE_HUB_URL)) {
-  $env:CONTINUE_HUB_URL = "https://hub.continue.dev"
-}
 
 # --- Sanitize URL-like provider env vars that commonly cause `401 "Invalid URL"` ---
 function Remove-EmptyUrlEnv {
@@ -380,55 +346,32 @@ function Invoke-ContinueCli {
   Write-Host "::group::Continue CLI environment"
   try { $cnVer = (& cn --version) 2>&1 } catch { throw "Continue CLI (cn) not found on PATH." }
   Write-Host "cn --version:`n$cnVer"
-  Write-Host "CONTINUE_CONFIG (slug/file): $Config"
-  if ([string]::IsNullOrWhiteSpace($env:CONTINUE_HUB_URL)) { $env:CONTINUE_HUB_URL = "https://hub.continue.dev" }
-  Write-Host ("CONTINUE_HUB_URL: " + $env:CONTINUE_HUB_URL)
-  Write-Host ("CONTINUE_API_KEY: " + ($(if ($env:CONTINUE_API_KEY) { "[set]" } else { "[missing]" })))
+  Write-Host "CONTINUE_CONFIG (file): $Config"
   Write-Host "::endgroup::"
 
   # Write prompt to a temp file
   $tempPromptFile = Join-Path $env:RUNNER_TEMP 'continue_prompt.txt'
   $Prompt | Set-Content -Path $tempPromptFile -Encoding UTF8
 
-  # Output files
-  $outFile = Join-Path $env:RUNNER_TEMP 'continue_cli_stdout.txt'
-  $errFile = Join-Path $env:RUNNER_TEMP 'continue_cli_stderr.txt'
-  Remove-Item -ErrorAction SilentlyContinue $outFile, $errFile
+  Write-Host "Running Continue CLI..."
 
-  # Call cn WITHOUT stdin/pipes; pass the prompt as a single arg
-  # Note: quoting is handled by PowerShell when you pass as separate args
-  Write-Host "Running Continue CLI (DEBUG)..."
+  # Invoke Continue CLI and capture its combined output directly (local configs only)
+  $cnOutput = & cn --config $Config -p (Get-Content -Raw $tempPromptFile) --auto 2>&1
 
-  & cn --config aident/al-review-bot --auto -p "Return ONLY the string OK" --config $Config --verbose
+  # Known raw log location (Continue may still write its own raw log)
+  $runTemp = $env:RUNNER_TEMP
+  $contRaw = Join-Path $runTemp 'continue_cli_raw.log'
 
+  # Copy raw log to workspace so upload-artifact (next step) can pick it up if present
+  $logDir = Join-Path $env:GITHUB_WORKSPACE '.continue-logs'
+  New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-#   & cn `
-#     --hub $env:CONTINUE_HUB_URL `
-#     --config $Config `
-#     -p (Get-Content -Raw $tempPromptFile) `
-#     --auto `
-#       1> $outFile `
-#       2> $errFile
+  $copied = @()
+  if (Test-Path $contRaw) {
+    Copy-Item $contRaw -Destination (Join-Path $logDir (Split-Path $contRaw -Leaf)) -Force
+    $copied += (Join-Path $logDir (Split-Path $contRaw -Leaf))
+  }
 
-    # Known log locations
-    $runTemp = $env:RUNNER_TEMP
-    $contRaw = Join-Path $runTemp 'continue_cli_raw.log'
-    $cnStdout = Join-Path $runTemp 'continue_cli_stdout.txt'
-    $cnStderr = Join-Path $runTemp 'continue_cli_stderr.txt'
-
-    # Also copy to workspace so upload-artifact (next step) can pick them up
-    $logDir = Join-Path $env:GITHUB_WORKSPACE '.continue-logs'
-    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-
-    $copied = @()
-    foreach ($p in @($contRaw, $cnStdout, $cnStderr)) {
-    if (Test-Path $p) {
-        Copy-Item $p -Destination (Join-Path $logDir (Split-Path $p -Leaf)) -Force
-        $copied += (Join-Path $logDir (Split-Path $p -Leaf))
-    }
-    }
-
-    # Print where the logs are for convenience
     if ($copied.Count -gt 0) {
     Write-Host ("Logs copied for upload: " + ($copied -join ', '))
     } else {
@@ -436,8 +379,8 @@ function Invoke-ContinueCli {
     }
 
   $exit = $LASTEXITCODE
-  $stdout = (Test-Path $outFile) ? (Get-Content -Raw $outFile) : ""
-  $stderr = (Test-Path $errFile) ? (Get-Content -Raw $errFile) : ""
+  $stdout = ($cnOutput -join "`n")
+  $stderr = ""
 
   # Continue CLI often writes its own raw log here; show users where to look
   $contRaw = Join-Path $env:RUNNER_TEMP 'continue_cli_raw.log'
@@ -465,7 +408,7 @@ function Invoke-ContinueCli {
 
 # ---------- Execute ----------
 $promptText = Get-Content $tempPrompt -Raw
-Write-Host "Resolved CONTINUE_CONFIG slug/file: '$cfg'"
+Write-Host "Resolved Continue config file: '$cfg'"
 try {
   $review = Invoke-ContinueCli -Config $cfg -Prompt $promptText
 } catch {

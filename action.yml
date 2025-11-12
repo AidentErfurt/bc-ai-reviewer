@@ -12,16 +12,19 @@ inputs:
     required: true
     type: string
 
-  # Continue (Hub) + Model
-  CONTINUE_API_KEY:
-    description: "Continue Hub API key"
+    # Continue Models
+    
+
+  
+
+
+
+    MODELS_BLOCK:
+    description: "Multiline YAML to replace the built-in models block (use secrets for apiKey values). This input is REQUIRED and will fully replace the action's embedded models: section."
     required: true
     type: string
-  CONTINUE_CONFIG:
-    description: "Hub slug for your reviewer (e.g. aident/bc-pr-reviewer or continuedev/review-bot)"
-    required: false
-    default: "continuedev/review-bot"
-    type: string
+
+
 
   # Review behaviour
   APPROVE_REVIEWS:
@@ -117,11 +120,8 @@ runs:
     - name: Run AI Code Review (Continue + MCP)
       shell: pwsh
       env:
-        # Continue config may launch MCP servers that look for these env vars.
         GITHUB_TOKEN:                 ${{ inputs.GITHUB_TOKEN || github.token }}
-        GITHUB_PERSONAL_ACCESS_TOKEN: ${{ inputs.GITHUB_TOKEN || github.token }}
-        CONTINUE_API_KEY:             ${{ inputs.CONTINUE_API_KEY }}
-        CONTINUE_CONFIG:              ${{ inputs.CONTINUE_CONFIG }}
+        MODELS_BLOCK:                 ${{ inputs.MODELS_BLOCK }}
       run: |
         $params = @{
           GitHubToken           = "${{ inputs.GITHUB_TOKEN || github.token }}"
@@ -140,16 +140,20 @@ runs:
         if ("${{ inputs.APPROVE_REVIEWS }}" -eq "true") { $params.ApproveReviews = $true }
         if ("${{ inputs.LOG_PROMPT }}" -eq "true")      { $params.LogPrompt      = $true }
 
+                # Always create merged config from MODELS_BLOCK and write to runner temp
+        $mergeOut = Join-Path $env:RUNNER_TEMP 'continue-config.yaml'
+        Write-Host "Creating merged config at $mergeOut from MODELS_BLOCK"
+                  # The merge helper reads MODELS_BLOCK from the environment
+          $env:MODELS_BLOCK = "${{ inputs.MODELS_BLOCK }}"
+          & "${{ github.action_path }}/.github/actions/continue/merge-config.ps1" --out $mergeOut
+          $cfgPath = $mergeOut
+
+
+                        # Export CONTINUE_CONFIG for the PowerShell script to pick up
+        $env:CONTINUE_CONFIG = $cfgPath
+
         & "${{ github.action_path }}/scripts/continue-review.ps1" @params
 
-    - name: Upload Continue logs
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: continue-cli-logs
-        path: |
-          .continue-logs/continue_cli_raw.log
-          .continue-logs/continue_cli_stdout.txt
-          .continue-logs/continue_cli_stderr.txt
-        if-no-files-found: warn
-        retention-days: 7
+
+
+
