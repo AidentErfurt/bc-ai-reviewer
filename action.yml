@@ -13,7 +13,7 @@ inputs:
     type: string
 
   # Continue Models
-    MODELS_BLOCK:
+  MODELS_BLOCK:
     description: "Multiline YAML to replace the built-in models block (use secrets for apiKey values). This input is REQUIRED and will fully replace the action's embedded models: section."
     required: true
     type: string
