@@ -8,10 +8,10 @@ schema: v1
 # useful for PR/code-review runs (context, rules, prompts, etc.).
 
 # Context configuration used to assemble context for the reviewer.
+# The Continue CLI expects `context` to be an array of context blocks.
 context:
-  # Files to include when building local repo context for reviews
-  files:
-    include:
+  - files:
+      include:
       - "**/*.al"
     # Additional file types can be added at runtime via the action input
     # `INCLUDE_PATTERNS` (comma-separated globs or extensions). Examples:
@@ -45,4 +45,11 @@ rules:
 
 prompts:
   - uses: file://.continue/prompts/review-pr.md
+
+
+# Empty placeholders so other tools/hub imports can be added safely.
+# Use empty arrays where the CLI expects arrays (instead of empty objects).
+docs: []
+mcpServers: []
+data: []
 
