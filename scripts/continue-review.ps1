@@ -365,8 +365,6 @@ function Invoke-ContinueCli {
     [Parameter(Mandatory)][string]$Prompt
   )
 
-  if (-not $env:CONTINUE_LOG_LEVEL) { $env:CONTINUE_LOG_LEVEL = "debug" }
-
   Write-Host "::group::Continue CLI environment"
   try { $cnVer = (& cn --version) 2>&1 } catch { throw "Continue CLI (cn) not found on PATH." }
   Write-Host "cn --version:`n$cnVer"
@@ -379,55 +377,20 @@ function Invoke-ContinueCli {
 
   Write-Host "Running Continue CLI..."
 
-  # Invoke Continue CLI and capture its combined output directly (local configs only)
+  # Invoke Continue CLI and capture its output. Do not try to copy or parse raw logs separately;
+  # let the CLI emit its own logs to the runner. If it exits non-zero, surface a simple error.
   $cnOutput = & cn --config $Config -p (Get-Content -Raw $tempPromptFile) --auto 2>&1
-
-  # Known raw log location (Continue may still write its own raw log)
-  $runTemp = $env:RUNNER_TEMP
-  $contRaw = Join-Path $runTemp 'continue_cli_raw.log'
-
-  # Copy raw log to workspace so upload-artifact (next step) can pick it up if present
-  $logDir = Join-Path $env:GITHUB_WORKSPACE '.continue-logs'
-  New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-
-  $copied = @()
-  if (Test-Path $contRaw) {
-    Copy-Item $contRaw -Destination (Join-Path $logDir (Split-Path $contRaw -Leaf)) -Force
-    $copied += (Join-Path $logDir (Split-Path $contRaw -Leaf))
-  }
-
-    if ($copied.Count -gt 0) {
-    Write-Host ("Logs copied for upload: " + ($copied -join ', '))
-    } else {
-    Write-Warning "No Continue logs were found to copy."
-    }
-
   $exit = $LASTEXITCODE
   $stdout = ($cnOutput -join "`n")
-  $stderr = ""
-
-  # Continue CLI often writes its own raw log here; show users where to look
-  $contRaw = Join-Path $env:RUNNER_TEMP 'continue_cli_raw.log'
-  if (Test-Path $contRaw) {
-    Write-Host ("Continue raw log: " + $contRaw)
-  }
 
   if ($exit -ne 0) {
-    # Try to parse structured JSON error if present; otherwise surface stderr + log path
-    try {
-      $errJson = $stdout | ConvertFrom-Json -ErrorAction Stop
-      if ($errJson.status -and $errJson.message) {
-        throw ("Continue CLI failed (exit {0}): {1}: {2}" -f $exit, $errJson.status, $errJson.message)
-      }
-    } catch { }
-
-    $hint = (Test-Path $contRaw) ? " Full raw log: $contRaw" : ""
-    throw ("Continue CLI failed (exit {0}).{1}" -f $exit, $hint)
+    throw ("Continue CLI failed (exit {0})." -f $exit)
   }
 
-  # Extract JSON from model output (same logic you had, but run on $stdout)
+  # Parse the CLI JSON output produced by the model run and return it
   return Get-JsonFromText -Text $stdout
 }
+
 
 
 # ---------- Execute ----------
