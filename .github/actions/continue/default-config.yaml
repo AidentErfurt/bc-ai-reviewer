@@ -13,8 +13,10 @@ context:
   files:
     include:
       - "**/*.al"
-      - "**/*.xlf"
-      - "**/*.json"
+    # Additional file types can be added at runtime via the action input
+    # `INCLUDE_PATTERNS` (comma-separated globs or extensions). Examples:
+    #   "**/*.xlf,**/*.json"
+    #   "xlf,json"    # will be normalized to **/*.xlf, **/*.json
     exclude: []
 
   # Context providers (recommended for PR review)

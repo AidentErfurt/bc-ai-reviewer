@@ -18,7 +18,7 @@ param(
   [int]$MaxComments = 10,
   [string]$ProjectContext = "",
   [string]$ContextFiles = "",
-  [string]$IncludePatterns = "**/*.al,**/*.xlf,**/*.json",
+  [string]$IncludePatterns = "**/*.al",
   [string]$ExcludePatterns = "",
   [int]$IssueCount = 0,
   [bool]$FetchClosedIssues = $true,
@@ -115,8 +115,18 @@ $files = @($pdOut | ConvertFrom-Json) | Where-Object { $_ }
 if (-not $files.Count) { Write-Host "No changed files; exiting."; return }
 
 # Filter by include/exclude globs
-$inc = $IncludePatterns -split ',' | % { $_.Trim() } | ? { $_ }
-$exc = $ExcludePatterns -split ',' | % { $_.Trim() } | ? { $_ }
+if (-not $IncludePatterns -or $IncludePatterns.Trim().Length -eq 0) { $IncludePatterns = "**/*.al" }
+
+# Split and normalize include/exclude tokens. Allow bare extensions (e.g. "xlf" or ".json")
+$inc = $IncludePatterns -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+$exc = $ExcludePatterns -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+
+# Normalize includes: if token looks like a glob (contains '*' or '/' or '\'), keep it.
+# Otherwise treat as an extension (leading dot optional) and convert to "**/*.<ext>".
+$inc = $inc | ForEach-Object {
+  if ($_ -match '[\*\/\\]') { $_ } elseif ($_ -match '^\.') { "**/*$$_" } else { "**/*.$_" }
+}
+
 $compiledIncludes = $inc | ForEach-Object { [System.Management.Automation.WildcardPattern]::Get($_,[System.Management.Automation.WildcardOptions]::IgnoreCase) }
 $compiledExcludes = $exc | ForEach-Object { [System.Management.Automation.WildcardPattern]::Get($_,[System.Management.Automation.WildcardOptions]::IgnoreCase) }
 

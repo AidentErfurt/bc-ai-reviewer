@@ -39,10 +39,10 @@ inputs:
     type: string
     default: ""
 
-  INCLUDE_PATTERNS:
-    description: "Comma-separated globs to include in review"
+    INCLUDE_PATTERNS:
+    description: "Comma-separated globs to include in review (default: AL files)"
     type: string
-    default: "**/*.al,**/*.xlf,**/*.json"
+    default: "**/*.al"
 
   EXCLUDE_PATTERNS:
     description: "Comma-separated globs to exclude"
