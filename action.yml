@@ -148,6 +148,7 @@ runs:
 
     - name: Show merged Continue config (Linux)
       if: always()
+      shell: bash
       run: |
         echo "=== merged continue-config.yaml ==="
         sed -n '1,200p' "$RUNNER_TEMP/continue-config.yaml" || true
