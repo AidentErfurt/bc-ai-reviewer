@@ -137,7 +137,7 @@ runs:
         Write-Host "Creating merged config at $mergeOut from MODELS_BLOCK"
                   # The merge helper reads MODELS_BLOCK from the environment
           $env:MODELS_BLOCK = "${{ inputs.MODELS_BLOCK }}"
-          & "${{ github.action_path }}/.github/actions/continue/merge-config.ps1" --out $mergeOut
+          & "${{ github.action_path }}/.github/actions/continue/merge-config.ps1" -out $mergeOut
           $cfgPath = $mergeOut
 
 
