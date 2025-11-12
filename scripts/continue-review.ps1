@@ -380,6 +380,7 @@ function Invoke-ContinueCli {
     # Invoke Continue CLI and stream output to runner while saving to a temp file for parsing
   $tempCnOut = Join-Path $env:RUNNER_TEMP 'continue_cn_out.log'
   # Use Tee-Object so cn's output is both printed to the runner log and written to a file
+  & cn --config $Config -p "hi" --verbose #dev
   & cn --config $Config -p (Get-Content -Raw $tempPromptFile) --auto 2>&1 | Tee-Object -FilePath $tempCnOut
   $exit = $LASTEXITCODE
   $stdout = if (Test-Path $tempCnOut) { Get-Content -Raw $tempCnOut } else { "" }
