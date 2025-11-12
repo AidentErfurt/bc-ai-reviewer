@@ -101,6 +101,31 @@ function SubstitutePlaceholders([string]$text) {
 # Perform substitution on the models block itself
 $mb = SubstitutePlaceholders $mb
 
+# Helper: write a redacted copy of the merged config for debugging (hides secrets)
+function Write-RedactedConfig([string]$outPath, [string]$text) {
+  try {
+    # Redact common sensitive keys (case-insensitive): apiKey, apikey, api_key, key, secret, token, password
+    $pattern = '(?im)^(\s*[^:\n]*?(?:api[-_ ]?key|apikey|apiBase|apiKey|api_key|key|secret|token|password)\s*:\s*)(.+)$'
+    $redacted = [regex]::Replace($text, $pattern, '${1} "***REDACTED***"')
+
+    # Additionally redact any values that look like long opaque tokens ( > 40 non-whitespace chars )
+    $redacted = [regex]::Replace($redacted, '(?m)(^\s*[^:]+:\s*)([A-Za-z0-9_\-\.=]{40,})', '${1} "***REDACTED***"')
+
+    $redPath = $outPath + '.redacted'
+    Set-Content -Path $redPath -Value $redacted -Encoding UTF8 -ErrorAction Stop
+    Write-Host "Wrote redacted config to $redPath"
+
+    # Only print the redacted contents if explicitly enabled (avoid leaking secrets in logs)
+    if ($env:CONTINUE_SHOW_REDACTED -eq '1') {
+      Write-Host "===== Redacted merged continue-config.yaml ====="
+      Get-Content -Raw -Path $redPath | Write-Host
+      Write-Host "===== End redacted config ====="
+    }
+  } catch {
+    Write-Warning "Failed to write/print redacted config: $_"
+  }
+}
+
 # Find the existing models: start in the default text
 $modelsStartRegex = '(?m)^[ \t]*models:\s*$'
 $startMatch = [regex]::Match($defaultText, $modelsStartRegex)
@@ -111,6 +136,8 @@ if (-not $startMatch.Success) {
   try {
     Set-Content -Path $out -Value $outText -Encoding UTF8
     Write-Host "Appended models block to default config and wrote to $out"
+    # Also write a redacted copy for debugging (no secrets)
+    Write-RedactedConfig -outPath $out -text $outText
     exit 0
   } catch {
     Write-Error "Failed to write output file: $_"
@@ -153,6 +180,8 @@ $outText = SubstitutePlaceholders $outText
 try {
   Set-Content -Path $out -Value $outText -Encoding UTF8
   Write-Host "Wrote merged config with replacement models block to $out"
+  # Also write a redacted copy for debugging (no secrets)
+  Write-RedactedConfig -outPath $out -text $outText
   exit 0
 } catch {
   Write-Error "Failed to write output file: $_"
