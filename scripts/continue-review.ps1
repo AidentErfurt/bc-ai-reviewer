@@ -114,29 +114,43 @@ if ($LASTEXITCODE -ne 0) { throw "parse-diff failed: $pdOut" }
 $files = @($pdOut | ConvertFrom-Json) | Where-Object { $_ }
 if (-not $files.Count) { Write-Host "No changed files; exiting."; return }
 
-# Filter by include/exclude globs
+# Filter by include/exclude globs (verbose diagnostics)
 if (-not $IncludePatterns -or $IncludePatterns.Trim().Length -eq 0) { $IncludePatterns = "**/*.al" }
 
-# Split and normalize include/exclude tokens. Allow bare extensions (e.g. "xlf" or ".json")
+# Split and normalize include/exclude tokens (extensions -> globs)
 $inc = $IncludePatterns -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
 $exc = $ExcludePatterns -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-
-# Normalize includes: if token looks like a glob (contains '*' or '/' or '\'), keep it.
-# Otherwise treat as an extension (leading dot optional) and convert to "**/*.<ext>".
 $inc = $inc | ForEach-Object {
   if ($_ -match '[\*\/\\]') { $_ } elseif ($_ -match '^\.') { "**/*$$_" } else { "**/*.$_" }
 }
 
-$compiledIncludes = $inc | ForEach-Object { [System.Management.Automation.WildcardPattern]::Get($_,[System.Management.Automation.WildcardOptions]::IgnoreCase) }
-$compiledExcludes = $exc | ForEach-Object { [System.Management.Automation.WildcardPattern]::Get($_,[System.Management.Automation.WildcardOptions]::IgnoreCase) }
+$compiledIncludes = $inc | ForEach-Object { [System.Management.Automation.WildcardPattern]::Get($_, [System.Management.Automation.WildcardOptions]::IgnoreCase) }
+$compiledExcludes = $exc | ForEach-Object { [System.Management.Automation.WildcardPattern]::Get($_, [System.Management.Automation.WildcardOptions]::IgnoreCase) }
 
-$relevant = @(
-  $files | Where-Object {
-    $p = $_.path
-    ((@($compiledIncludes | ? { $_.IsMatch($p) })).Count -gt 0) -and
-    ((@($compiledExcludes | ? { $_.IsMatch($p) })).Count -eq 0)
+Write-Host "Normalized include patterns: $($inc -join ', ')"
+Write-Host "Exclude patterns: $($exc -join ', ')"
+
+Write-Host "Changed files from parse-diff:"
+foreach ($f in $files) {
+  $pOut = ($f.path -replace '\\','/').TrimStart('./')
+  Write-Host " - $pOut"
+}
+
+$relevant = @()
+foreach ($f in $files) {
+  $p = ($f.path -replace '\\','/').TrimStart('./')
+  $matchedInclude = $false
+  foreach ($pat in $compiledIncludes) { if ($pat.IsMatch($p)) { $matchedInclude = $true; break } }
+  $matchedExclude = $false
+  foreach ($epat in $compiledExcludes) { if ($epat.IsMatch($p)) { $matchedExclude = $true; break } }
+
+  if ($matchedInclude -and -not $matchedExclude) {
+    $relevant += $f
+  } else {
+    Write-Host "Skipping $p (include=$matchedInclude exclude=$matchedExclude)"
   }
-)
+}
+
 if (-not $relevant) { Write-Host "No relevant files after globs; exiting."; return }
 
 # Build commentable line whitelist (HEAD/right only), and number-prefixed diffs
