@@ -19,26 +19,26 @@ context:
     #   "xlf,json"    # will be normalized to **/*.xlf, **/*.json
     exclude: []
 
-  # Context providers (recommended for PR review)
-  providers:
-    - provider: diff
-    - provider: repo-map
-      params:
-        includeSignatures: false
-    - provider: currentFile
-    - provider: open
-      params:
-        onlyPinned: true
-    - provider: problems
-    - provider: file
-    - provider: terminal
+# Context providers (recommended for PR review)
+providers:
+  - provider: diff
+  - provider: repo-map
+    params:
+      includeSignatures: false
+  - provider: currentFile
+  - provider: open
+    params:
+      onlyPinned: true
+  - provider: problems
+  - provider: file
+  - provider: terminal
 
-  # Git diff provider settings: used to fetch PR diffs and hunks
-  gitDiff:
-    enabled: true
-    # Limits to avoid enormous prompts on very large PRs
-    maxFiles: 500
-    maxHunksPerFile: 50
+# Git diff provider settings: used to fetch PR diffs and hunks
+gitDiff:
+  enabled: true
+  # Limits to avoid enormous prompts on very large PRs
+  maxFiles: 500
+  maxHunksPerFile: 50
 
 rules:
   - uses: file://.continue/rules/pr-reviewer.md
