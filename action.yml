@@ -146,6 +146,13 @@ runs:
 
         & "${{ github.action_path }}/scripts/continue-review.ps1" @params
 
-
+    - name: Show merged Continue config (Linux)
+      if: always()
+      run: |
+        echo "=== merged continue-config.yaml ==="
+        sed -n '1,200p' "$RUNNER_TEMP/continue-config.yaml" || true
+        echo
+        echo "=== redacted merged continue-config.yaml.redacted ==="
+        sed -n '1,200p' "$RUNNER_TEMP/continue-config.yaml.redacted" || true
 
 
