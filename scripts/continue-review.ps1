@@ -515,7 +515,7 @@ foreach ($c in $comments) {
   # Build GitHub comment body: remark + optional suggestion block
   $bodyFinal = $remark.TrimEnd()
   if ($suggestion -and $suggestion.Trim()) {
-    $bodyFinal += "`n`n```suggestion`n" + $suggestion.TrimEnd() + "`n``"
+    $bodyFinal += "`n`n```suggestion`n" + $suggestion.TrimEnd() + "`n````"
   }
 
   $ok = $false
