@@ -515,7 +515,13 @@ foreach ($c in $comments) {
   # Build GitHub comment body: remark + optional suggestion block
   $bodyFinal = $remark.TrimEnd()
   if ($suggestion -and $suggestion.Trim()) {
-    $bodyFinal += "`n`n```suggestion`n" + $suggestion.TrimEnd() + "`n````"
+      # Optional: strip any rogue ``` the model might sneak in, just in case
+      $cleanSuggestion = ($suggestion -replace '```', '').TrimEnd()
+
+      $bodyFinal += "`n`n" +
+                    '```suggestion' + "`n" +
+                    $cleanSuggestion + "`n" +
+                    '```'
   }
 
   $ok = $false
