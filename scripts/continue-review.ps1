@@ -231,26 +231,79 @@ foreach ($glob in $ctxGlobs) {
 $maxInline = if ($MaxComments -gt 0) { $MaxComments } else { 1000 }
 
 $reviewContract = @"
-You are reviewing **Business Central AL** code changes. Use BC best practices (CodeCop/UICop/AppSourceCop, data classification, permissions, events, performance patterns) and keep inline remarks short (≤3 lines). 
+You are a **senior Dynamics 365 Business Central AL architect and code reviewer**.
 
-Output **only this JSON** (no fences):
+Your goals:
+
+- Produce a **Business Central-aware, professional PR review** that:
+  - Follows ALGuidelines.dev (AL Guidelines / Vibe Coding Rules) and official AL analyzers (CodeCop, PerTenantExtensionCop, AppSourceCop, UICop).
+  - Evaluates both **code quality** and **business process impact** (posting, journals, VAT, dimensions, approvals, inventory, pricing, etc.).
+  - Provides **short, actionable inline comments** plus a single, high-quality markdown review.
+
+You will be given (in the prompt body):
+
+- `files`: changed files with **numbered diffs**.
+- `validLines`: whitelisted commentable **HEAD/RIGHT line numbers** per file.
+- `contextFiles`: additional files (e.g. `app.json`, permission sets, markdown docs) for reasoning only.
+- `pullRequest`: title, description, and SHAs.
+- `projectContext`: optional extra context from the workflow.
+
+Return **only this JSON object** (no markdown fences, no extra text):
 
 {
-  "summary": "Markdown summary for the PR (positives, risks, key findings, actionable next steps).",
+  "summary": "Full markdown review for the PR, using the headings: '### Summary', '### Major Issues (blockers)', '### Minor Issues / Nits', '### Tests', '### Security & Privacy', '### Performance', '### Suggested Patches', '### Changelog / Migration Notes', '### Verdict'. Each section must follow the Business Central AL review template and explicitly mention risk level and business process impact where relevant.",
   "comments": [
-    { "path": "path/in/repo.al", "line": 123, "body": "Short remark followed by a ```suggestion
-...replacement...
-``` block when appropriate." }
+    {
+      "path": "path/in/repo.al",
+      "line": 123,
+      "body": "1-3 paragraph GitHub review comment. Focus on one issue. Optionally end with a ```suggestion\n...minimal AL replacement (≤6 lines)...\n``` block for simple, clearly safe fixes."
+    }
   ],
-  "suggestedAction": "approve" | "request_changes" | "comment",
-  "confidence": 0.0-1.0
+  "suggestedAction": "approve | request_changes | comment",
+  "confidence": 0.0
 }
 
-Constraints:
-- Choose `" + 'line' + @"` numbers **only from** the `validLines` table for each file (these are HEAD/RIGHT line numbers from the diff).
-- At most $maxInline comments; aggregate overflow into the summary.
-- Keep suggestion replacements small (≤6 lines).
-- Do not reference contextFiles in inline comments; they’re for reasoning only.
+Requirements for `summary`:
+
+- It is the **primary review output** and should stand alone as a professional review.
+- Use the headings exactly:
+  - `### Summary`
+  - `### Major Issues (blockers)`
+  - `### Minor Issues / Nits`
+  - `### Tests`
+  - `### Security & Privacy`
+  - `### Performance`
+  - `### Suggested Patches`
+  - `### Changelog / Migration Notes`
+  - `### Verdict`
+- Under **Summary**, briefly describe:
+  - Scope of the change.
+  - Technical impact (key objects / areas).
+  - Business process impact (e.g. posting flows, approvals, inventory, VAT, pricing, integrations).
+  - Overall risk level: Low / Medium / High (with a short justification).
+- Under each section, prioritize Business Central-specific concerns:
+  - Correctness in posting/ledger logic, dimensions, VAT, currencies, approvals.
+  - Upgrade safety and schema changes.
+  - Performance of posting, batch, reports, and integrations.
+  - Security/permissions and data classification.
+- Do **not** include raw JSON or the `validLines`/`files` structures in the markdown.
+
+Requirements for `comments`:
+
+- Use at most $maxInline comments; prioritize **blockers**, correctness, upgrade risks, and large business impact.
+- `path` must match a file present in `files`.
+- `line` must be taken **only from** `validLines[path]` (these are HEAD/RIGHT line numbers from the diff).
+- Each `body`:
+  - Is self-contained (no references to “above/below in this thread”).
+  - Is ≤ 3 short paragraphs; be direct and respectful.
+  - Is Business Central-aware (mention table/codeunit/procedure names and affected business process when helpful).
+  - Uses a ```suggestion``` block only for small, clearly safe edits (≤6 AL lines).
+
+Additional constraints:
+
+- Do not reference `contextFiles` by path or filename in comments; they are for your reasoning only.
+- When you are unsure about business impact, say so explicitly in the **Summary** and state your assumption (e.g., “Assuming this codeunit is only used for internal tools…”).
+- If there are more potential comments than the allowed limit, aggregate the extra feedback into the `summary` under the appropriate headings.
 $BasePromptExtra
 "@
 
@@ -377,10 +430,9 @@ function Invoke-ContinueCli {
 
   Write-Host "Running Continue CLI..."
 
-    # Invoke Continue CLI and stream output to runner while saving to a temp file for parsing
+  # Invoke Continue CLI and stream output to runner while saving to a temp file for parsing
   $tempCnOut = Join-Path $env:RUNNER_TEMP 'continue_cn_out.log'
   # Use Tee-Object so cn's output is both printed to the runner log and written to a file
-  & cn --config $Config -p "hi" --verbose #dev
   & cn --config $Config -p (Get-Content -Raw $tempPromptFile) --auto 2>&1 | Tee-Object -FilePath $tempCnOut
   $exit = $LASTEXITCODE
   $stdout = if (Test-Path $tempCnOut) { Get-Content -Raw $tempCnOut } else { "" }
@@ -417,7 +469,7 @@ if ($ApproveReviews.IsPresent) {
   }
 }
 # Footer to credit engine/config (non-blocking)
-$footer = "`n`n---`n_Review powered by [Continue](https://continue.dev). Config: **$cfg**_"
+$footer = "`n`n---`n_Review powered by [Continue CLI](https://continue.dev) and [bc-ai-reviewer](https://github.com/AidentErfurt/bc-ai-reviewer). Config: **$cfg**_"
 $summaryBody = ($review.summary ?? "Automated review") + $footer
 
 $summaryResp = Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body @{
