@@ -256,7 +256,8 @@ Return **only this JSON object** (no markdown fences, no extra text):
     {
       "path": "path/in/repo.al",
       "line": 123,
-      "body": "1-3 paragraph GitHub review comment. Focus on one issue. Optionally end with a ```suggestion\n...minimal AL replacement (≤6 lines)...\n``` block for simple, clearly safe fixes."
+      "remark": "1-3 paragraph GitHub review comment. Focus on one issue and explain the impact in Business Central terms.",
+      "suggestion": "Optional AL replacement snippet (≤6 lines) with no backticks and no 'suggestion' label. Leave empty string if no suggestion."
     }
   ],
   "suggestedAction": "approve | request_changes | comment",
@@ -291,13 +292,13 @@ Requirements for `summary`:
 Requirements for `comments`:
 
 - Use at most $maxInline comments; prioritize **blockers**, correctness, upgrade risks, and large business impact.
-- `path` must match a file present in `files`.
-- `line` must be taken **only from** `validLines[path]` (these are HEAD/RIGHT line numbers from the diff).
-- Each `body`:
-  - Is self-contained (no references to “above/below in this thread”).
-  - Is ≤ 3 short paragraphs; be direct and respectful.
-  - Is Business Central-aware (mention table/codeunit/procedure names and affected business process when helpful).
-  - Uses a ```suggestion``` block only for small, clearly safe edits (≤6 AL lines).
+- Each comment object has:
+  - `path`: file path from the diff. Must match a file present in `files`.
+  - `line`: a line number taken only from `validLines[path]` (these are HEAD/RIGHT line numbers from the diff).
+  - `remark`: the natural-language feedback (≤ 3 short paragraphs). Be direct and respectful.
+  - `suggestion`: optional AL replacement snippet (≤ 6 lines). **No backticks**, no `suggestion` label; the caller will wrap it in the correct GitHub ```suggestion``` block.
+- If there is no safe, minimal replacement, set `suggestion` to an empty string.
+
 
 Additional constraints:
 
@@ -503,16 +504,18 @@ foreach ($f in $relevant) {
 foreach ($c in $comments) {
   $path = $c.path
   $line = [int]$c.line
-  $body = [string]$c.body
-  if (-not $path -or -not $body) { continue }
+  $remark = [string]$c.remark
+  $suggestion = [string]$c.suggestion
+
+  if (-not $path -or -not $remark) { continue }
 
   $whitelist = $validLines[$path]
   $sideFor   = $sideMap[$path]
 
-  $bodyFinal = $body
-  if ($bodyFinal -notmatch '```suggestion') {
-    # allow non-suggestion remarks; keep short
-    $bodyFinal = $body
+  # Build GitHub comment body: remark + optional suggestion block
+  $bodyFinal = $remark.TrimEnd()
+  if ($suggestion -and $suggestion.Trim()) {
+    $bodyFinal += "`n`n```suggestion`n" + $suggestion.TrimEnd() + "`n``"
   }
 
   $ok = $false
