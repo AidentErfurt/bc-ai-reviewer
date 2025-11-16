@@ -73,6 +73,24 @@ function Get-PRFiles {
   $all
 }
 
+function Get-PRReviewComments {
+  param(
+    [string]$Owner,
+    [string]$Repo,
+    [int]   $PrNumber
+  )
+
+  $page = 1
+  $all  = @()
+  do {
+    $resp = Invoke-GitHub -Path "/repos/$Owner/$Repo/pulls/$PrNumber/comments?per_page=100&page=$page"
+    $all  += $resp
+    $page++
+  } while ($resp.Count -eq 100)
+
+  return $all
+}
+
 function Get-FileContent {
   param([string]$Owner,[string]$Repo,[string]$Path,[string]$RefSha)
   try {
@@ -230,6 +248,31 @@ foreach ($glob in $ctxGlobs) {
 ############################################################################
 $maxInline = if ($MaxComments -gt 0) { $MaxComments } else { 1000 }
 
+############################################################################
+# Load previous PR review comments (for model context)
+############################################################################
+$existingComments = Get-PRReviewComments -Owner $owner -Repo $repo -PrNumber $prNumber
+Write-Host ("Found {0} existing PR review comment(s) on this PR" -f $existingComments.Count)
+
+# Normalize and cap previous comments to keep payload reasonable
+$previousComments = @(
+  $existingComments |
+    Sort-Object created_at |
+    Select-Object -First 200 |
+    ForEach-Object {
+      [pscustomobject]@{
+        id         = $_.id
+        path       = $_.path
+        line       = $_.line
+        body       = $_.body
+        author     = $_.user.login
+        created_at = $_.created_at
+      }
+    }
+)
+
+$hasPreviousComments = $previousComments.Count -gt 0
+
 $reviewContract = @"
 You are a **senior Dynamics 365 Business Central AL architect and code reviewer**.
 
@@ -318,8 +361,10 @@ $payload = @{
     base = $pr.base.sha
     head = $pr.head.sha
   }
-  projectContext = $ProjectContext
+  projectContext   = $ProjectContext
+  previousComments = $previousComments
 }
+
 
 $tempPrompt = Join-Path $env:RUNNER_TEMP 'continue_prompt.txt'
 $tempJson   = Join-Path $env:RUNNER_TEMP 'continue_input.json'
@@ -336,7 +381,10 @@ $(( $numberedFiles | ConvertTo-Json -Depth 6 ))
 $(( $validLines | ConvertTo-Json -Depth 6 ))
 
 ## CONTEXT FILES (truncated as needed)
-$(( @($ctxFiles | Select-Object -First 30) | ConvertTo-Json -Depth 4 ))
+$(( @($ctxFiles | Select-Object -First 30) | ConvertTo-Json -Depth 4  ))
+
+## PREVIOUS COMMENTS (truncated as needed)
+$(( $previousComments | ConvertTo-Json -Depth 4 ))
 "@ | Set-Content -Path $tempPrompt -Encoding UTF8
 
 if ($LogPrompt) {
