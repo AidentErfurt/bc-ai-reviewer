@@ -104,7 +104,7 @@ function Get-FileContent {
           Write-Host "Reading file from workspace: $localPath"
           return Get-Content -Path $localPath -Raw -ErrorAction Stop
         } catch {
-          Write-Warning "Failed reading local file $localPath: $_"
+          Write-Warning "Failed reading local file $($localPath): $_"
           # fall through to API attempt
         }
       }
