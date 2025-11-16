@@ -374,7 +374,7 @@ foreach ($f in $relevant) {
 }
 
 Write-Host ("Discovered {0} bcObjects" -f $bcObjects.Count)
-if ($DebugPayload.IsPresent -and $bcObjects.Count -gt 0) {
+if ($DebugPayload -and $bcObjects.Count -gt 0) {
   Write-Host "::group::DEBUG: bcObjects (parsed)"
   try {
     $bcObjects | ConvertTo-Json -Depth 6 | ForEach-Object { Write-Host $_ }
@@ -531,7 +531,7 @@ $tempPrompt = Join-Path $env:RUNNER_TEMP 'continue_prompt.txt'
 $tempJson   = Join-Path $env:RUNNER_TEMP 'continue_input.json'
 $payload | ConvertTo-Json -Depth 8 | Set-Content -Path $tempJson -Encoding UTF8
 
-if ($DebugPayload.IsPresent) {
+if ($DebugPayload) {
   Write-Host "::group::DEBUG: continue_input.json (payload)"
   try {
     $json = $payload | ConvertTo-Json -Depth 8
@@ -686,7 +686,7 @@ try {
 # Post summary as a safe, standalone review first
 ############################################################################
 $event = 'COMMENT'
-if ($ApproveReviews.IsPresent) {
+if ($ApproveReviews) {
   switch ($review.suggestedAction) {
     'approve'         { $event = 'APPROVE' }
     'request_changes' { $event = 'REQUEST_CHANGES' }
