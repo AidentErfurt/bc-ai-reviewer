@@ -78,7 +78,8 @@ inputs:
     description: "Free-form text injected into the reviewers prompt (optional)"
     type: string
     default: ""
-    LOG_PROMPT:
+
+  LOG_PROMPT:
     description: "Log prompt JSON (redacted) to runner logs"
     type: boolean
     default: false
