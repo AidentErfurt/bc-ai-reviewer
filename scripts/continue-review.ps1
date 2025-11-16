@@ -27,7 +27,8 @@ param(
   [bool]$IncludeAppMarkdown = $true,
   [string]$BasePromptExtra = "",
   [switch]$ApproveReviews,
-  [switch]$LogPrompt
+  [switch]$LogPrompt, 
+  [switch]$DebugPayload
 )
 
 ############################################################################
@@ -496,6 +497,18 @@ $payload = @{
 $tempPrompt = Join-Path $env:RUNNER_TEMP 'continue_prompt.txt'
 $tempJson   = Join-Path $env:RUNNER_TEMP 'continue_input.json'
 $payload | ConvertTo-Json -Depth 8 | Set-Content -Path $tempJson -Encoding UTF8
+
+if ($DebugPayload.IsPresent) {
+  Write-Host "::group::DEBUG: continue_input.json (payload)"
+  try {
+    $json = $payload | ConvertTo-Json -Depth 8
+    # Emit JSON line-by-line so it appears nicely in GitHub Actions logs
+    $json -split "`n" | ForEach-Object { Write-Host $_ }
+  } catch {
+    Write-Warning "Failed to convert payload to JSON for debug: $_"
+  }
+  Write-Host "::endgroup::"
+}
 
 # Build a single prompt text (reviewContract + machine-readable section)
 @"

@@ -78,10 +78,16 @@ inputs:
     description: "Free-form text injected into the reviewers prompt (optional)"
     type: string
     default: ""
-  LOG_PROMPT:
+    LOG_PROMPT:
     description: "Log prompt JSON (redacted) to runner logs"
     type: boolean
     default: false
+
+  DEBUG_PAYLOAD:
+    description: "When true, prints the full JSON payload (continue_input.json) to the Actions log in a collapsible group. Use for debugging only; can be large and may expose secrets."
+    type: boolean
+    default: false
+
 
 runs:
   using: composite
@@ -131,6 +137,8 @@ runs:
         }
         if ("${{ inputs.APPROVE_REVIEWS }}" -eq "true") { $params.ApproveReviews = $true }
         if ("${{ inputs.LOG_PROMPT }}" -eq "true")      { $params.LogPrompt      = $true }
+        if ("${{ inputs.DEBUG_PAYLOAD }}" -eq "true")   { $params.DebugPayload   = $true }
+
 
                 # Always create merged config from MODELS_BLOCK and write to runner temp
         $mergeOut = Join-Path $env:RUNNER_TEMP 'continue-config.yaml'
