@@ -272,29 +272,32 @@ foreach ($f in $relevant) {
 
     $lines = $content -split "`r?`n"
 
-  # --- Namespace and using imports ----------------------------------------
+    # --- Namespace and using imports ----------------------------------------
   $namespace = $null
   $usings    = @()
 
   foreach ($ln in $lines) {
     if (-not $namespace -and $ln -match '^\s*namespace\s+(?<ns>.+?);') {
-      $rawNs = $matches['ns'].Trim()
-      if ($rawNs.StartsWith('"') -and $rawNs.EndsWith('"') -and $rawNs.Length -ge 2) {
-        $namespace = $rawNs.Substring(1, $rawNs.Length - 2)
-      } else {
-        $namespace = $rawNs
+      $rawNs = ([string]$matches['ns']).Trim()
+      if (-not $rawNs) { continue }
+        if ($rawNs.StartsWith('"') -and $rawNs.EndsWith('"') -and $rawNs.Length -ge 2) {
+          $namespace = $rawNs.Substring(1, $rawNs.Length - 2)
+        } else {
+          $namespace = $rawNs
+        }
       }
-    }
 
     if ($ln -match '^\s*using\s+(?<using>.+?);') {
-      $rawUsing = $matches['using'].Trim()
-      if ($rawUsing.StartsWith('"') -and $rawUsing.EndsWith('"') -and $rawUsing.Length -ge 2) {
-        $usings += $rawUsing.Substring(1, $rawUsing.Length - 2)
-      } else {
-        $usings += $rawUsing
-      }
+      $rawUsing = ([string]$matches['using']).Trim()
+      if (-not $rawUsing) { continue }
+        if ($rawUsing.StartsWith('"') -and $rawUsing.EndsWith('"') -and $rawUsing.Length -ge 2) {
+          $usings += $rawUsing.Substring(1, $rawUsing.Length - 2)
+        } else {
+          $usings += $rawUsing
+        }
     }
   }
+
 
   $headerIndex = -1
   $objType = $null
@@ -305,24 +308,31 @@ foreach ($f in $relevant) {
   # Best-effort AL object header detection:
   #   page 50100 "My Page"
   #   pageextension 50101 "My Ext" extends "Customer Card"
-  for ($i = 0; $i -lt $lines.Length; $i++) {
+    for ($i = 0; $i -lt $lines.Length; $i++) {
     $lineText = $lines[$i]
     if ($lineText -match '^\s*(?<objType>\w+)\s+(?<objId>\d+)\s+(?<objName>"[^"]+"|\w+)\b') {
       $headerIndex = $i
-      $objType = $matches['objType'].Value
-      $objIdRaw = $matches['objId'].Value
+      $objType  = ([string]$matches['objType']).Trim()
+      $objIdRaw = ([string]$matches['objId']).Trim()
+
       if ($objIdRaw) {
         [int]$objId = $objIdRaw
       }
-      $nameRaw = $matches['objName'].Value.Trim()
-      if ($nameRaw.StartsWith('"') -and $nameRaw.EndsWith('"') -and $nameRaw.Length -ge 2) {
-        $objName = $nameRaw.Substring(1, $nameRaw.Length - 2)
-      } else {
-        $objName = $nameRaw
+
+      $nameRaw = ([string]$matches['objName']).Trim()
+      if (-not $nameRaw) {
+        $objName = $null
+        break
       }
+        if ($nameRaw.StartsWith('"') -and $nameRaw.EndsWith('"') -and $nameRaw.Length -ge 2) {
+          $objName = $nameRaw.Substring(1, $nameRaw.Length - 2)
+        } else {
+          $objName = $nameRaw
+        }
       break
     }
   }
+
 
   if ($headerIndex -lt 0) { continue }
 
@@ -336,9 +346,11 @@ foreach ($f in $relevant) {
       break
     }
 
-    if ($propLine -match '^\s*(?<propName>\w+)\s*=\s*(?<propValue>.+?);') {
-      $pName = $matches['propName'].Value
-      $pValue = $matches['propValue'].Value.Trim()
+        if ($propLine -match '^\s*(?<propName>\w+)\s*=\s*(?<propValue>.+?);') {
+      $pName  = ([string]$matches['propName']).Trim()
+      $pValue = ([string]$matches['propValue']).Trim()
+
+      if (-not $pName) { continue }
 
       if (-not $props.ContainsKey($pName)) {
                 switch ($pName) {
@@ -352,6 +364,7 @@ foreach ($f in $relevant) {
         }
       }
     }
+
   }
 
         $bcObjects += [pscustomobject]@{
