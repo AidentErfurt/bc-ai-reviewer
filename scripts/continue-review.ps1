@@ -645,6 +645,10 @@ function Get-JsonFromText {
   }
 }
 
+############################################################################
+# Continue CLI runner + result normalization
+############################################################################
+
 # ---------- Single CLI runner (stdin feed; no slug->URL conversion) ----------
 function Invoke-ContinueCli {
   param(
@@ -679,16 +683,76 @@ function Invoke-ContinueCli {
   return Get-JsonFromText -Text $stdout
 }
 
+function Normalize-ReviewResult {
+  param(
+    [Parameter(Mandatory)][object]$Review
+  )
+
+  if (-not $Review) {
+    throw "Continue returned no JSON payload."
+  }
+
+  if (-not ($Review.PSObject.Properties.Name -contains 'summary')) {
+    throw "Continue JSON is missing required property 'summary'."
+  }
+
+  # Coerce summary to string for safety
+  $Review.summary = [string]$Review.summary
+
+  # Ensure comments exists and is enumerable
+  if (-not ($Review.PSObject.Properties.Name -contains 'comments') -or -not $Review.comments) {
+    $Review | Add-Member -NotePropertyName comments -NotePropertyValue @() -Force
+  }
+
+  $normalizedComments = @()
+  foreach ($c in @($Review.comments)) {
+    if (-not $c) { continue }
+
+    $path       = $null
+    $line       = $null
+    $remark     = $null
+    $suggestion = ""
+
+    if ($c.PSObject.Properties.Name -contains 'path') {
+      $path = [string]$c.path
+    }
+    if ($c.PSObject.Properties.Name -contains 'line') {
+      try { $line = [int]$c.line } catch { $line = $null }
+    }
+    if ($c.PSObject.Properties.Name -contains 'remark') {
+      $remark = [string]$c.remark
+    }
+    if ($c.PSObject.Properties.Name -contains 'suggestion' -and $c.suggestion) {
+      $suggestion = [string]$c.suggestion
+    }
+
+    if (-not $path -or -not $remark -or -not $line) {
+      continue
+    }
+
+    $normalizedComments += [pscustomobject]@{
+      path       = $path
+      line       = $line
+      remark     = $remark
+      suggestion = $suggestion
+    }
+  }
+
+  $Review.comments = $normalizedComments
+  return $Review
+}
 
 
 # ---------- Execute ----------
 $promptText = Get-Content $tempPrompt -Raw
 Write-Host "Resolved Continue config file: '$cfg'"
 try {
-  $review = Invoke-ContinueCli -Config $cfg -Prompt $promptText
+  $rawReview = Invoke-ContinueCli -Config $cfg -Prompt $promptText
+  $review    = Normalize-ReviewResult -Review $rawReview
 } catch {
   throw "Continue run failed: $($_.Exception.Message)"
 }
+
 
 ############################################################################
 # Normalize and validate model output
@@ -769,6 +833,15 @@ if ($ApproveReviews) {
     default           { $event = 'COMMENT' }
   }
 }
+
+# Simple observability of what the model decided
+$suggestedActionValue = 'null'
+if ($review.PSObject.Properties.Name -contains 'suggestedAction' -and $review.suggestedAction) {
+  $suggestedActionValue = [string]$review.suggestedAction
+}
+Write-Host ("Continue suggestedAction: {0} -> GitHub review event: {1}" -f `
+  $suggestedActionValue, $event)
+
 # Footer to credit engine/config (non-blocking)
 $footer = "`n`n---`n_Review powered by [Continue CLI](https://continue.dev) and [bc-ai-reviewer](https://github.com/AidentErfurt/bc-ai-reviewer)_."
 $summaryBody = ($review.summary ?? "Automated review") + $footer
@@ -786,7 +859,9 @@ Write-Host "Summary review posted."
 $posted = 0
 $comments = @($review.comments) | Where-Object { $_ } 
 if ($MaxComments -gt 0 -and $comments.Count -gt $MaxComments) {
-  $comments = $comments[0..($MaxComments-1)]
+  Write-Host ("MaxComments limit {0} hit; truncating from {1} to {0} comment(s)." -f `
+    $MaxComments, $comments.Count)
+  $comments = $comments[0..($MaxComments - 1)]
 }
 
 # Build per-file side map & whitelist from parse-diff output (RIGHT only)
