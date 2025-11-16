@@ -95,36 +95,33 @@ function Get-PRReviewComments {
 function Get-FileContent {
   param([string]$Owner,[string]$Repo,[string]$Path,[string]$RefSha)
   try {
-    # Prefer reading from checked-out workspace (faster, avoids API and handles spaces)
+    # Read from the checked-out workspace only. The action checks out the repo with fetch-depth: 0,
+    # so local files should always be available and this avoids API calls and rate limits.
     $repoRoot = $env:GITHUB_WORKSPACE
-    if ($repoRoot) {
-      $localPath = Join-Path $repoRoot $Path
-      if (Test-Path $localPath) {
-        try {
-          Write-Host "Reading file from workspace: $localPath"
-          return Get-Content -Path $localPath -Raw -ErrorAction Stop
-        } catch {
-          Write-Warning "Failed reading local file $($localPath): $_"
-          # fall through to API attempt
-        }
-      }
+    if (-not $repoRoot) {
+      Write-Warning "GITHUB_WORKSPACE is not set; cannot read local files."
+      return $null
     }
 
-    # Fallback: call GitHub API. Ensure path segments are URL-encoded to handle spaces/special chars.
-    $encPath = ($Path -split '/') | ForEach-Object { [uri]::EscapeDataString($_) } -join '/'
-    $blob = Invoke-GitHub -Path "/repos/$Owner/$Repo/contents/$encPath?ref=$RefSha"
-    if ($blob -and $blob.content) {
-      $bytes = [Convert]::FromBase64String($blob.content)
-      [System.Text.Encoding]::UTF8.GetString($bytes)
-    } else {
-      Write-Warning "Could not fetch content for $Path via API (no content)."
-      $null
+    $localPath = Join-Path $repoRoot $Path
+    if (-not (Test-Path $localPath)) {
+      Write-Warning ("Local file not found: {0}" -f $localPath)
+      return $null
+    }
+
+    try {
+      Write-Host ("Reading file from workspace: {0}" -f $localPath)
+      return Get-Content -Path $localPath -Raw -ErrorAction Stop
+    } catch {
+      Write-Warning ("Failed reading local file {0}: {1}" -f $localPath, $_)
+      return $null
     }
   } catch {
-    Write-Warning "Get-FileContent failed for $($Path): $_"
-    $null
+    Write-Warning ("Get-FileContent unexpected error for {0}: {1}" -f $Path, $_)
+    return $null
   }
 }
+
 
 
 ############################################################################
@@ -132,6 +129,7 @@ function Get-FileContent {
 ############################################################################
 $ErrorActionPreference = 'Stop'
 
+try {
 $owner, $repo = $env:GITHUB_REPOSITORY.Split('/')
 $evt = Get-Content $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
 if (-not $evt.pull_request) { Write-Warning "No pull_request payload. Exiting."; return }
@@ -789,3 +787,8 @@ foreach ($c in $comments) {
 
 Write-Host "Posted $posted inline/file-level comments."
 Write-Host "Done."
+} catch {
+  Write-Error ("Fatal error in continue-review.ps1: {0}" -f $_.Exception.Message)
+  Write-Error $_.Exception.ToString()
+  exit 1
+}
