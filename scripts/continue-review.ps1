@@ -95,13 +95,37 @@ function Get-PRReviewComments {
 function Get-FileContent {
   param([string]$Owner,[string]$Repo,[string]$Path,[string]$RefSha)
   try {
-    $blob = Invoke-GitHub -Path "/repos/$Owner/$Repo/contents/$Path?ref=$RefSha"
-    if ($blob.content) {
+    # Prefer reading from checked-out workspace (faster, avoids API and handles spaces)
+    $repoRoot = $env:GITHUB_WORKSPACE
+    if ($repoRoot) {
+      $localPath = Join-Path $repoRoot $Path
+      if (Test-Path $localPath) {
+        try {
+          Write-Host "Reading file from workspace: $localPath"
+          return Get-Content -Path $localPath -Raw -ErrorAction Stop
+        } catch {
+          Write-Warning "Failed reading local file $localPath: $_"
+          # fall through to API attempt
+        }
+      }
+    }
+
+    # Fallback: call GitHub API. Ensure path segments are URL-encoded to handle spaces/special chars.
+    $encPath = ($Path -split '/') | ForEach-Object { [uri]::EscapeDataString($_) } -join '/'
+    $blob = Invoke-GitHub -Path "/repos/$Owner/$Repo/contents/$encPath?ref=$RefSha"
+    if ($blob -and $blob.content) {
       $bytes = [Convert]::FromBase64String($blob.content)
       [System.Text.Encoding]::UTF8.GetString($bytes)
+    } else {
+      Write-Warning "Could not fetch content for $Path via API (no content)."
+      $null
     }
-  } catch { $null }
+  } catch {
+    Write-Warning "Get-FileContent failed for $Path: $_"
+    $null
+  }
 }
+
 
 ############################################################################
 # Repo / PR discovery
@@ -349,6 +373,17 @@ foreach ($f in $relevant) {
     properties         = $props
   }
 
+}
+
+Write-Host ("Discovered {0} bcObjects" -f $bcObjects.Count)
+if ($DebugPayload.IsPresent -and $bcObjects.Count -gt 0) {
+  Write-Host "::group::DEBUG: bcObjects (parsed)"
+  try {
+    $bcObjects | ConvertTo-Json -Depth 6 | ForEach-Object { Write-Host $_ }
+  } catch {
+    Write-Warning "Failed to convert bcObjects to JSON for debug: $_"
+  }
+  Write-Host "::endgroup::"
 }
 
 # Custom context globs (from repo HEAD)
