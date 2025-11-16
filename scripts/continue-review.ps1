@@ -229,6 +229,127 @@ if ($AutoDetectApps) {
   }
 }
 
+############################################################################
+# Build deterministic Business Central object metadata (bcObjects)
+############################################################################
+
+$bcObjects = @()
+
+foreach ($f in $relevant) {
+  # Only consider AL files
+  if (-not $f.path -or -not ($f.path.ToLower().EndsWith('.al'))) {
+    continue
+  }
+
+  # Fetch HEAD version of the file so metadata matches the current PR state
+  $content = Get-FileContent -Owner $owner -Repo $repo -Path $f.path -RefSha $headSha
+  if (-not $content) {
+    continue
+  }
+
+    $lines = $content -split "`r?`n"
+
+  # --- Namespace and using imports ----------------------------------------
+  $namespace = $null
+  $usings    = @()
+
+  foreach ($ln in $lines) {
+    if (-not $namespace -and $ln -match '^\s*namespace\s+(?<ns>.+?);') {
+      $rawNs = $matches['ns'].Trim()
+      if ($rawNs.StartsWith('"') -and $rawNs.EndsWith('"') -and $rawNs.Length -ge 2) {
+        $namespace = $rawNs.Substring(1, $rawNs.Length - 2)
+      } else {
+        $namespace = $rawNs
+      }
+    }
+
+    if ($ln -match '^\s*using\s+(?<using>.+?);') {
+      $rawUsing = $matches['using'].Trim()
+      if ($rawUsing.StartsWith('"') -and $rawUsing.EndsWith('"') -and $rawUsing.Length -ge 2) {
+        $usings += $rawUsing.Substring(1, $rawUsing.Length - 2)
+      } else {
+        $usings += $rawUsing
+      }
+    }
+  }
+
+  $headerIndex = -1
+  $objType = $null
+  $objId = $null
+  $objName = $null
+
+
+  # Best-effort AL object header detection:
+  #   page 50100 "My Page"
+  #   pageextension 50101 "My Ext" extends "Customer Card"
+  for ($i = 0; $i -lt $lines.Length; $i++) {
+    $lineText = $lines[$i]
+    if ($lineText -match '^\s*(?<objType>\w+)\s+(?<objId>\d+)\s+(?<objName>"[^"]+"|\w+)\b') {
+      $headerIndex = $i
+      $objType = $matches['objType'].Value
+      $objIdRaw = $matches['objId'].Value
+      if ($objIdRaw) {
+        [int]$objId = $objIdRaw
+      }
+      $nameRaw = $matches['objName'].Value.Trim()
+      if ($nameRaw.StartsWith('"') -and $nameRaw.EndsWith('"') -and $nameRaw.Length -ge 2) {
+        $objName = $nameRaw.Substring(1, $nameRaw.Length - 2)
+      } else {
+        $objName = $nameRaw
+      }
+      break
+    }
+  }
+
+  if ($headerIndex -lt 0) { continue }
+
+  # Collect object-level properties until the first structural section (layout/actions/keys/fields/…) 
+  $props = @{}
+  for ($j = $headerIndex + 1; $j -lt $lines.Length; $j++) {
+    $propLine = $lines[$j]
+
+    # Stop once we hit the start of layout/actions/fields/etc. (object sections, not properties)
+    if ($propLine -match '^\s*(layout|actions|area\s*\(|group\s*\(|repeater\s*\(|field\s*\(|keys|trigger|var|labels|requestpage|dataset)\b') {
+      break
+    }
+
+    if ($propLine -match '^\s*(?<propName>\w+)\s*=\s*(?<propValue>.+?);') {
+      $pName = $matches['propName'].Value
+      $pValue = $matches['propValue'].Value.Trim()
+
+      if (-not $props.ContainsKey($pName)) {
+                switch ($pName) {
+          'PageType'           { $props['PageType']           = $pValue }
+          'ApplicationArea'    { $props['ApplicationArea']    = $pValue }
+          'UsageCategory'      { $props['UsageCategory']      = $pValue }
+          'SourceTable'        { $props['SourceTable']        = $pValue }
+          'DataClassification' { $props['DataClassification'] = $pValue }
+          'Editable'           { $props['Editable']           = $pValue }
+          'InsertAllowed'      { $props['InsertAllowed']      = $pValue }
+        }
+      }
+    }
+  }
+
+        $bcObjects += [pscustomobject]@{
+    path               = $f.path
+    objectType         = $objType
+    id                 = $objId
+    name               = $objName
+    namespace          = $namespace
+    usings             = $usings
+    pageType           = $props['PageType']
+    applicationArea    = $props['ApplicationArea']
+    usageCategory      = $props['UsageCategory']
+    sourceTable        = $props['SourceTable']
+    dataClassification = $props['DataClassification']
+    editable           = $props['Editable']
+    insertAllowed      = $props['InsertAllowed']
+    properties         = $props
+  }
+
+}
+
 # Custom context globs (from repo HEAD)
 $ctxGlobs = $ContextFiles -split ',' | % { $_.Trim() } | ? { $_ }
 foreach ($glob in $ctxGlobs) {
@@ -288,7 +409,9 @@ You will be given (in the prompt body):
 - `files`: changed files with **numbered diffs**.
 - `validLines`: whitelisted commentable **HEAD/RIGHT line numbers** per file.
 - `contextFiles`: additional files (e.g. `app.json`, permission sets, markdown docs) for reasoning only.
+- `bcObjects`: parsed AL object metadata per file (objectType, id, name, PageType, ApplicationArea, UsageCategory, SourceTable, namespace, usings).
 - `pullRequest`: title, description, and SHAs.
+
 - `projectContext`: optional extra context from the workflow.
 - `previousComments`: earlier PR review comments for context (if any).
 
@@ -355,14 +478,15 @@ $BasePromptExtra
 "@
 
 $payload = @{
-  files       = $numberedFiles
-  validLines  = $validLines
-  contextFiles= $ctxFiles
-  pullRequest = @{
-    title = $pr.title
+  files          = $numberedFiles
+  validLines     = $validLines
+  contextFiles   = $ctxFiles
+  bcObjects      = $bcObjects
+  pullRequest    = @{
+    title       = $pr.title
     description = $pr.body
-    base = $pr.base.sha
-    head = $pr.head.sha
+    base        = $pr.base.sha
+    head        = $pr.head.sha
   }
   projectContext   = $ProjectContext
   previousComments = $previousComments
@@ -385,6 +509,9 @@ $(( $validLines | ConvertTo-Json -Depth 6 ))
 
 ## CONTEXT FILES (truncated as needed)
 $(( @($ctxFiles | Select-Object -First 30) | ConvertTo-Json -Depth 4  ))
+
+## BC OBJECTS (parsed metadata per AL object)
+$(( $bcObjects | ConvertTo-Json -Depth 5 ))
 
 ## PREVIOUS COMMENTS (truncated as needed)
 $(( $previousComments | ConvertTo-Json -Depth 4 ))
