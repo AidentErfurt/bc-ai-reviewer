@@ -290,6 +290,7 @@ You will be given (in the prompt body):
 - `contextFiles`: additional files (e.g. `app.json`, permission sets, markdown docs) for reasoning only.
 - `pullRequest`: title, description, and SHAs.
 - `projectContext`: optional extra context from the workflow.
+- `previousComments`: earlier PR review comments for context (if any).
 
 Return **only this JSON object** (no markdown fences, no extra text):
 
@@ -335,6 +336,8 @@ Requirements for `summary`:
 Requirements for `comments`:
 
 - Use at most $maxInline comments; prioritize **blockers**, correctness, upgrade risks, and large business impact.
+- Don't duplicate earlier comments (previousComments).
+- comments: [] is valid and recommended when there’s nothing new and high-value.
 - Each comment object has:
   - `path`: file path from the diff. Must match a file present in `files`.
   - `line`: a line number taken only from `validLines[path]` (these are HEAD/RIGHT line numbers from the diff).
@@ -518,7 +521,7 @@ if ($ApproveReviews.IsPresent) {
   }
 }
 # Footer to credit engine/config (non-blocking)
-$footer = "`n`n---`n_Review powered by [Continue CLI](https://continue.dev) and [bc-ai-reviewer](https://github.com/AidentErfurt/bc-ai-reviewer). Config: **$cfg**_"
+$footer = "`n`n---`n_Review powered by [Continue CLI](https://continue.dev) and [bc-ai-reviewer](https://github.com/AidentErfurt/bc-ai-reviewer)."
 $summaryBody = ($review.summary ?? "Automated review") + $footer
 
 $summaryResp = Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body @{
