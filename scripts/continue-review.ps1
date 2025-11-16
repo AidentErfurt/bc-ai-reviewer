@@ -1,15 +1,5 @@
 <#
-  Continue + MCP PR reviewer for Business Central AL
 
-  Key differences vs. v1:
-  - Uses Continue CLI headless review configured via CONTINUE_CONFIG (Hub/local).
-  - First posts the summary as its own review (cannot be invalidated by inline failures).
-  - Then posts each inline comment individually; failed anchors fall back to file-level notes.
-  - Maps to diff lines robustly using parse-diff, favoring RIGHT/ln2 (HEAD) numbers.
-
-  Requirements in Action step:
-    npm i -g @continuedev/cli
-    npm i --no-save parse-diff
 #>
 
 [CmdletBinding()]
@@ -27,9 +17,11 @@ param(
   [bool]$IncludeAppMarkdown = $true,
   [string]$BasePromptExtra = "",
   [switch]$ApproveReviews,
-  [switch]$LogPrompt, 
-  [switch]$DebugPayload
+  [switch]$LogPrompt,
+  [switch]$DebugPayload,
+  [switch]$DryRun
 )
+
 
 ############################################################################
 # HTTP helpers
@@ -63,17 +55,6 @@ function Get-PRDiff {
   Invoke-GitHub -Path "/repos/$Owner/$Repo/pulls/$PrNumber" -Accept 'application/vnd.github.v3.diff'
 }
 
-function Get-PRFiles {
-  param([string]$Owner, [string]$Repo, [int]$PrNumber)
-  $page = 1; $all = @()
-  do {
-    $resp = Invoke-GitHub -Path "/repos/$Owner/$Repo/pulls/$PrNumber/files?per_page=100&page=$page"
-    $all += $resp
-    $page++
-  } while ($resp.Count -eq 100)
-  $all
-}
-
 function Get-PRReviewComments {
   param(
     [string]$Owner,
@@ -84,13 +65,24 @@ function Get-PRReviewComments {
   $page = 1
   $all  = @()
   do {
-    $resp = Invoke-GitHub -Path "/repos/$Owner/$Repo/pulls/$PrNumber/comments?per_page=100&page=$page"
-    $all  += $resp
-    $page++
+    try {
+      $resp = Invoke-GitHub -Path "/repos/$Owner/$Repo/pulls/$PrNumber/comments?per_page=100&page=$page"
+    } catch {
+      Write-Warning ("Failed to fetch PR review comments (page {0}): {1}" -f $page, $_)
+      break
+    }
+
+    if ($resp) {
+      $all += $resp
+      $page++
+    } else {
+      break
+    }
   } while ($resp.Count -eq 100)
 
   return $all
 }
+
 
 function Get-FileContent {
   param([string]$Owner,[string]$Repo,[string]$Path,[string]$RefSha)
@@ -195,13 +187,16 @@ foreach ($f in $files) {
 if (-not $relevant) { Write-Host "No relevant files after globs; exiting."; return }
 
 # Build commentable line whitelist (HEAD/right only), and number-prefixed diffs
-$validLines = @{}
-$numberedFiles = foreach ($f in $relevant) {
+$validLines    = @{}
+$numberedFiles = @()
+
+foreach ($f in $relevant) {
   $lines = foreach ($chunk in $f.chunks) {
     foreach ($chg in $chunk.changes) {
       if ($chg.ln2) { "{0} {1}" -f $chg.ln2, $chg.content }
     }
   }
+
   $validLines[$f.path] = @(
     foreach ($chunk in $f.chunks) {
       foreach ($chg in $chunk.changes) {
@@ -210,11 +205,12 @@ $numberedFiles = foreach ($f in $relevant) {
     }
   ) | Sort-Object -Unique
 
-  [pscustomobject]@{
+  $numberedFiles += [pscustomobject]@{
     path = $f.path
     diff = ($lines -join "`n")
   }
 }
+
 
 ############################################################################
 # Optional: gather app context and extra globs
@@ -694,10 +690,77 @@ try {
   throw "Continue run failed: $($_.Exception.Message)"
 }
 
+############################################################################
+# Normalize and validate model output
+############################################################################
+if (-not $review) {
+  throw "Continue CLI returned no review payload."
+}
+
+if ($DebugPayload) {
+  Write-Host "::group::DEBUG: raw review from Continue"
+  try {
+    $review | ConvertTo-Json -Depth 8 | ForEach-Object { Write-Host $_ }
+  } catch {
+    Write-Warning "Failed to convert raw review to JSON for debug: $_"
+  }
+  Write-Host "::endgroup::"
+}
+
+# Normalize suggestedAction
+$validSuggested = @('approve','request_changes','comment')
+if (
+  -not ($review.PSObject.Properties.Name -contains 'suggestedAction') -or
+  -not $review.suggestedAction -or
+  -not ($validSuggested -contains ($review.suggestedAction.ToString().ToLower()))
+) {
+  $review | Add-Member -NotePropertyName suggestedAction -NotePropertyValue 'comment' -Force
+}
+
+# Normalize comments into a predictable array shape
+$rawComments = $review.comments
+if (-not $rawComments) {
+  $rawComments = @()
+} elseif (-not ($rawComments -is [System.Collections.IEnumerable])) {
+  $rawComments = @($rawComments)
+}
+
+$normalizedComments = @()
+foreach ($c in $rawComments) {
+  if (-not $c) { continue }
+  $path   = $c.path
+  $line   = $c.line
+  $remark = $c.remark
+
+  if (-not $path -or -not $line -or -not $remark) { continue }
+  $normalizedComments += $c
+}
+
+$review | Add-Member -NotePropertyName comments -NotePropertyValue $normalizedComments -Force
+
+Write-Host ("Model returned {0} comment(s); using {1} after normalization." -f ($rawComments.Count), ($normalizedComments.Count))
+
+# Dry-run: show the result and skip all GitHub write operations
+if ($DryRun) {
+  Write-Host "::group::DRY RUN: review result (no GitHub calls)"
+  try {
+    $out = [pscustomobject]@{
+      summary         = $review.summary
+      suggestedAction = $review.suggestedAction
+      comments        = $review.comments
+    }
+    $out | ConvertTo-Json -Depth 6 | ForEach-Object { Write-Host $_ }
+  } catch {
+    Write-Warning "Failed to dump dry-run review JSON: $_"
+  }
+  Write-Host "::endgroup::"
+  return
+}
 
 ############################################################################
 # Post summary as a safe, standalone review first
 ############################################################################
+
 $event = 'COMMENT'
 if ($ApproveReviews) {
   switch ($review.suggestedAction) {
