@@ -645,10 +645,6 @@ function Get-JsonFromText {
   }
 }
 
-############################################################################
-# Continue CLI runner + result normalization
-############################################################################
-
 # ---------- Single CLI runner (stdin feed; no slug->URL conversion) ----------
 function Invoke-ContinueCli {
   param(
@@ -683,131 +679,16 @@ function Invoke-ContinueCli {
   return Get-JsonFromText -Text $stdout
 }
 
-function Normalize-ReviewResult {
-  param(
-    [Parameter(Mandatory)][object]$Review
-  )
-
-  if (-not $Review) {
-    throw "Continue returned no JSON payload."
-  }
-
-  # Case 1: raw string (model didn't output JSON, or Continue wrapped it)
-  if ($Review -is [string]) {
-    Write-Warning "Continue returned a raw string; attempting to parse as JSON again."
-    try {
-      $parsed = Get-JsonFromText -Text $Review
-      return Normalize-ReviewResult -Review $parsed
-    } catch {
-      Write-Warning "Could not parse raw string from Continue into JSON. Falling back to minimal review."
-      return [pscustomobject]@{
-        summary         = "Automated review could not be generated because the model response was not valid JSON. See Actions logs for details."
-        comments        = @()
-        suggestedAction = "comment"
-        confidence      = 0.0
-      }
-    }
-  }
-
-  # Case 2: top-level array (treat as 'comments only')
-  if ($Review -is [System.Array]) {
-    Write-Warning "Continue returned a top-level JSON array; treating it as 'comments' only."
-    $Review = [pscustomobject]@{
-      summary         = "Automated review (auto-generated): model returned only an array of comments without a summary."
-      comments        = $Review
-      suggestedAction = "comment"
-      confidence      = 0.0
-    }
-  }
-
-  # Case 3: object with 'content' that itself looks like JSON – unwrap once
-  if (-not ($Review.PSObject.Properties.Name -contains 'summary') -and
-      ($Review.PSObject.Properties.Name -contains 'content') -and
-      $Review.content) {
-    $contentText = [string]$Review.content
-    if ($contentText.Trim().StartsWith('{') -or $contentText.Trim().StartsWith('[')) {
-      Write-Warning "Continue JSON missing 'summary' but contains 'content'; trying to parse nested JSON."
-      try {
-        $inner = Get-JsonFromText -Text $contentText
-        return Normalize-ReviewResult -Review $inner
-      } catch {
-        Write-Warning "Failed to parse nested content JSON from Continue: $_"
-      }
-    }
-  }
-
-  # At this point, treat missing 'summary' as non-fatal: create a stub summary.
-  if (-not ($Review.PSObject.Properties.Name -contains 'summary')) {
-    Write-Warning "Continue JSON is missing required property 'summary'; falling back to stub summary and no inline comments."
-
-    if ($DebugPayload) {
-      Write-Host "::group::DEBUG: raw review JSON (no summary)"
-      try {
-        $Review | ConvertTo-Json -Depth 6 | ForEach-Object { Write-Host $_ }
-      } catch {
-        Write-Warning "Failed to serialize raw review JSON for debug: $_"
-      }
-      Write-Host "::endgroup::"
-    }
-
-    $Review | Add-Member -NotePropertyName summary -NotePropertyValue `
-      "Automated review could not be fully generated because the model response did not follow the expected JSON contract. See Actions logs for the raw response." -Force
-
-    # If comments is missing, we will add an empty array below; if it exists,
-    # we'll still normalize it.
-  }
-
-  # Coerce summary to string for safety
-  $Review.summary = [string]$Review.summary
-
-  # Ensure comments exists and is enumerable
-  if (-not ($Review.PSObject.Properties.Name -contains 'comments') -or -not $Review.comments) {
-    $Review | Add-Member -NotePropertyName comments -NotePropertyValue @() -Force
-  }
-
-  $normalizedComments = @()
-    if (-not $c) { continue }
-
-    $path       = $null
-    $line       = $null
-    $suggestion = ""
-
-
-
-      try { $line = [int]$c.line } catch { $line = $null }
-
-    if ($c.PSObject.Properties.Name -contains 'remark') {
-      $remark = [string]$c.remark
-
-    }
-    if ($c.PSObject.Properties.Name -contains 'suggestion' -and $c.suggestion) {
-      $suggestion = [string]$c.suggestion
-
-    if (-not $path -or -not $remark -or -not $line) {
-      continue
-    }
-
-    $normalizedComments += [pscustomobject]@{
-      path       = $path
-      line       = $line
-      remark     = $remark
-      suggestion = $suggestion
-    }
-  $Review.comments = $normalizedComments
-  return $Review
-}
 
 
 # ---------- Execute ----------
 $promptText = Get-Content $tempPrompt -Raw
 Write-Host "Resolved Continue config file: '$cfg'"
 try {
-  $rawReview = Invoke-ContinueCli -Config $cfg -Prompt $promptText
-  $review    = Normalize-ReviewResult -Review $rawReview
+  $review = Invoke-ContinueCli -Config $cfg -Prompt $promptText
 } catch {
   throw "Continue run failed: $($_.Exception.Message)"
 }
-
 
 ############################################################################
 # Normalize and validate model output
@@ -914,7 +795,7 @@ Write-Host "Summary review posted."
 $posted = 0
 $comments = @($review.comments) | Where-Object { $_ } 
 if ($MaxComments -gt 0 -and $comments.Count -gt $MaxComments) {
-  Write-Host ("MaxComments limit {0} hit; truncating from {1} to {0} comment(s)." -f `
+    Write-Host ("MaxComments limit {0} hit; truncating from {1} to {0} comment(s)." -f `
     $MaxComments, $comments.Count)
   $comments = $comments[0..($MaxComments - 1)]
 }
