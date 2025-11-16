@@ -121,7 +121,7 @@ function Get-FileContent {
       $null
     }
   } catch {
-    Write-Warning "Get-FileContent failed for $Path: $_"
+    Write-Warning "Get-FileContent failed for $($Path): $_"
     $null
   }
 }
