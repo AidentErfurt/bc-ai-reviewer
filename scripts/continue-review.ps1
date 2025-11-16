@@ -335,8 +335,8 @@ Requirements for `summary`:
 
 Requirements for `comments`:
 
-- Use at most $maxInline comments; prioritize **blockers**, correctness, upgrade risks, and large business impact.
-- Don't duplicate earlier comments (previousComments).
+- Use at most $maxInline comments; prioritize **blockers**, correctness, upgrade risks, and business process impact.
+- Don't duplicate earlier comments (previousComments). Don't repeat these inline; if they’re still relevant, mention that in Summary instead.
 - comments: [] is valid and recommended when there’s nothing new and high-value.
 - Each comment object has:
   - `path`: file path from the diff. Must match a file present in `files`.
@@ -521,7 +521,7 @@ if ($ApproveReviews.IsPresent) {
   }
 }
 # Footer to credit engine/config (non-blocking)
-$footer = "`n`n---`n_Review powered by [Continue CLI](https://continue.dev) and [bc-ai-reviewer](https://github.com/AidentErfurt/bc-ai-reviewer)."
+$footer = "`n`n---`n_Review powered by [Continue CLI](https://continue.dev) and [bc-ai-reviewer](https://github.com/AidentErfurt/bc-ai-reviewer)_."
 $summaryBody = ($review.summary ?? "Automated review") + $footer
 
 $summaryResp = Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body @{
