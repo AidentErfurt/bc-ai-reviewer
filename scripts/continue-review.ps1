@@ -122,13 +122,44 @@ $ErrorActionPreference = 'Stop'
 
 try {
 $owner, $repo = $env:GITHUB_REPOSITORY.Split('/')
-$evt = Get-Content $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
+$evtPath = $env:GITHUB_EVENT_PATH
+$evt = Get-Content $evtPath -Raw | ConvertFrom-Json
+
+# When triggered by an issue_comment on a PR, GitHub places the PR link under
+# github.event.issue.pull_request, not at github.event.pull_request. Some
+# downstream logic (and external actions) expect a top-level pull_request.
+# If we have an issue_comment on a PR but no top-level pull_request, fetch the
+# PR via the REST API and inject it into the event payload so the rest of the
+# script can operate as if this were a pull_request event.
+if ($env:GITHUB_EVENT_NAME -eq 'issue_comment' -and $evt.issue -and $evt.issue.pull_request -and -not $evt.pull_request) {
+  try {
+    $prNumber = $evt.issue.number
+    Write-Host "issue_comment on PR #$prNumber detected; fetching PR to synthesize pull_request payload."
+    $pr = Get-PR -Owner $owner -Repo $repo -PrNumber $prNumber
+    if ($pr) {
+      $evt.pull_request = $pr
+      try {
+        # Overwrite the event file so subsequent steps/actions see the enriched payload
+        $evt | ConvertTo-Json -Depth 10 | Set-Content -Path $evtPath -Encoding UTF8
+        Write-Host "Injected pull_request payload into event file."
+      } catch {
+        Write-Warning ("Failed to write enriched event payload to $($evtPath): {0}" -f $_)
+      }
+    } else {
+      Write-Warning "Could not fetch PR #$prNumber to inject into event payload."
+    }
+  } catch {
+    Write-Warning ("Failed to fetch PR for issue_comment trigger: {0}" -f $_)
+  }
+}
+
 if (-not $evt.pull_request) { Write-Warning "No pull_request payload. Exiting."; return }
 $prNumber = $evt.pull_request.number
 $pr = Get-PR -Owner $owner -Repo $repo -PrNumber $prNumber
 $headSha = $pr.head.sha
 
 Write-Host "Reviewing PR #$prNumber in $owner/$repo @ $headSha"
+
 
 ############################################################################
 # Get unified diff and parse with parse-diff (Node)
