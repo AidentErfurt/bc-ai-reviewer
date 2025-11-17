@@ -698,6 +698,16 @@ $promptText = Get-Content $tempPrompt -Raw
 Write-Host "Resolved Continue config file: '$cfg'"
 try {
   $review = Invoke-ContinueCli -Config $cfg -Prompt $promptText
+
+  # Continue CLI sometimes returns a small list, e.g.
+  #   [ "<raw JSON as string>", { summary = "..."; comments = [...] } ]
+  # For our GitHub integration we only want the actual review object.
+  if ($review -is [System.Collections.IEnumerable] -and -not ($review -is [string])) {
+      $nonString = $review | Where-Object { $_ -isnot [string] }
+      if ($nonString -and $nonString.Count -gt 0) {
+          $review = $nonString[-1]   # take the last real object as the canonical review
+      }
+  }
 } catch {
   throw "Continue run failed: $($_.Exception.Message)"
 }
