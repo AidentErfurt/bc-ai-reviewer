@@ -2,193 +2,34 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Run an **AI-powered, Business Central-specific code review** on every pull request using **OpenAI**, **Azure OpenAI** *or* **OpenRouter.ai**.
-The action fetches the PR diff, optional context files, and any referenced issues, sends them to the LLM, then posts a summary review and granular inline comments right on the PR.
+Run an AI-powered, Business Central-specific code review on pull requests. This repo contains a GitHub composite action that:
 
-**Highlights**
+- Collects the PR unified diff and optional context files (app.json, permission sets, markdowns, linked issues).
+- Sends a structured prompt to your chosen LLM provider (Azure OpenAI, OpenAI, OpenRouter.ai).
+- Posts a summary review and fine-grained inline comments on the PR.
 
-* Context-aware reviews: automatically pulls in `app.json`, permission sets, entitlements, READMEs/other `.md` docs, the latest Microsoft [AL-Guidelines](https://github.com/microsoft/alguidelines) pages and any issues/discussions referenced in the PR.
-* Works with **Azure OpenAI**, **OpenAI** endpoints **and OpenRouter.ai**. Choose the provider/model that fits your budget.
-* Reviews are **incremental**: the bot ignores already-addressed feedback and comments only on new changes.
-* Hard cap for inline-comment noise (`MAX_COMMENTS`).
-* Fully configurable file-glob **include / exclude** filters.
+This branch includes a new "always-pass-a-model" workflow: you must supply a MODELS_BLOCK (multiline YAML) which completely replaces the built-in models: block. The action merges that block into the bundled default config at runtime, substitutes any placeholders from environment variables, writes a runner-local merged config, and runs the reviewer.
 
-### 🔧 Inputs
+Highlights
+- Opinionated defaults and rules are bundled in the action (default-config.yaml) so users get sensible behaviour out-of-the-box.
+- The MODELS_BLOCK input gives flexible model/provider selection (OpenAI, Azure, OpenRouter, local LLMs).
+- Secrets (apiKey, apiBase when secret) are never committed — provide them via GitHub Secrets and interpolate in the MODELS_BLOCK or expose as runner env placeholders.
+- Merge happens at runtime using `.github/actions/continue/merge-config.ps1` which substitutes placeholders of the form `{{NAME}}` from `env:NAME`.
 
-| Name                      | Required?                                          | Default                      | Description                                                                                   |
-| ------------------------- | -------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
-| `GITHUB_TOKEN`            | **yes**                                            | –                            | Token with `contents:read`, `pull-requests:write`, `issues:read`.                         |
-| `AI_PROVIDER`      | no                                          | `azure`              | `openai` \| `azure` \| `openrouter`.                                                                         |
-| `AI_MODEL`         | no                                          | `o3-mini`            | **Base model name** (e.g., `gpt-5`, `o3-mini`). For Azure, this is the *base model* used in the request body.|
-| `AZURE_DEPLOYMENT` | only when `AI_PROVIDER` = `azure` (recommended) | –                  | **Azure deployment name** (the friendly name you created in Azure). If omitted, falls back to `AI_MODEL`.    |
-| `AI_API_KEY`       | only when `AI_PROVIDER` = `openai` \| `openrouter` | –               | Public OpenAI key or OpenRouter key.                                                                         |
-| `AZURE_ENDPOINT`   | only when `AI_PROVIDER` = `azure`           | –                    | Your Azure OpenAI endpoint URL.                                                                              |
-| `AZURE_API_KEY`    | only when `AI_PROVIDER` = `azure`           | –                    | Azure OpenAI key.                                                                                            |
-| `AZURE_API_VERSION`| no                                          | `2025-01-01-preview` | Azure REST API version.                                                                                      |
-| `MAX_COMMENTS`            | no                                                 | `10`                         | Hard cap for inline comments (`0` = unlimited).                                               |
-| `BASE_PROMPT_EXTRA`       | no                                                 | `""`                         | Extra text injected into the **system prompt** *before* the fixed JSON-response instructions. |
-| `PROJECT_CONTEXT`         | no                                                 | `""`                         | Free-form architectural or guideline notes shown to the model.                                |
-| `CONTEXT_FILES`           | no                                                 | `""`                         | Comma-separated globs always provided as context (e.g. `README.md,docs/*.md`).                |
-| `INCLUDE_PATTERNS`        | no                                                 | `**/*.al,**/*.xlf,**/*.json` | Files to consider in the review.                                                              |
-| `EXCLUDE_PATTERNS`        | no                                                 | `""`                         | Globs to ignore.                                                                              |
-| `ISSUE_COUNT`             | no                                                 | `0`                          | Max linked issues to fetch (`0` = all).                                                       |
-| `FETCH_CLOSED_ISSUES`     | no                                                 | `true`                       | Include closed issues in the context.                                                         |
-| `AUTO_DETECT_APPS`        | no                                                 | `true`                       | Auto-discover `app.json` roots and add relevant files as context.                             |
-| `INCLUDE_APP_PERMISSIONS` | no                                                 | `true`                       | If auto-detect is on, include `*.PermissionSet.al` + `*.Entitlement.al` from each app.        |
-| `INCLUDE_APP_MARKDOWN`    | no                                                 | `true`                       | If auto-detect is on, include `*.md` files from each app.                                     |
-| `GUIDELINE_RULES_PATH`    | no                                                 | `""`                         | Path to a JSON or PSD1 file defining **custom AL-Guideline rules**.                           |
-| `DISABLE_GUIDELINEDOCS`   | no                                                 | `false`                      | Skip downloading the official Microsoft *AL Guidelines* docs.                                 |
-| `INCLUDE_CHANGED_FILES_AS_CONTEXT`   | no                                                 | `false`                      | Ship every file that is touched by the PR to the LLM as an extra context file.                                 |
-| `PROMPT_STYLE`            | no                                                 | `auto`                      | `auto` = GPT-5 prompt when `AI_MODEL` matches `gpt-5*` (OpenAI **or** Azure); `gpt5` forces it; `generic` disables it.      |
-| `REASONING_EFFORT`        | no                                                 | `medium`                    | Hint for GPT-5 reasoning depth: `low` \| `medium` \| `high` (ignored by other models).                                       |
-| `LOG_PROMPT`        | no                                                 | `false`                    | Log full prompt (diff + context) to runner logs.                                       |
+Quick concepts
+- MODELS_BLOCK (required): a multiline YAML string containing a `models:` array. It fully replaces the embedded `models:` section in default-config.yaml.
+- Merged config: the action writes a merged YAML to `$RUNNER_TEMP/continue-config.yaml` and sets `CONTINUE_CONFIG` to that path before invoking the existing review scripts.
+- Secrets: supply via `secrets.*` (interpolate directly in MODELS_BLOCK) or place placeholders like `apiKey: "{{AZURE_OPENAI_KEY}}"` and set the corresponding env var in the workflow.
 
+Minimal example (recommended): inline MODELS_BLOCK using interpolated secrets
 
-## 🛠 How it works
-
-1. The script detects the PR, gathers the diff and any previously addressed feedback.
-2. Optional **context files** and **linked issues** (`#123` in the PR description) are fetched.
-3. A structured prompt is sent to the chosen LLM.
-4. The response (JSON) is parsed; a summary review + inline comments are posted via the GitHub REST API.
-5. Subsequent runs only re-review commits newer than the last bot review.
-
-## 📦 Usage
-
-**GPT-5 prompt mode**  
-Set `PROMPT_STYLE: auto` (default). If `AI_MODEL` starts with `gpt-5` the action switches to the GPT-5-optimized, XML-structured prompt automatically-this works for both **OpenAI** and **Azure OpenAI** deployments. You can force it with `PROMPT_STYLE: gpt5` or disable with `PROMPT_STYLE: generic`. Optional `REASONING_EFFORT: high|medium|low` tunes GPT-5’s depth.
-
-## Azure OpenAI - Example 1
-
-| Why you’d use *this* example                                                | What it does                                                                                                                                                 |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **You already have an Azure OpenAI resource**                               | Connects the reviewer to *your* private Azure endpoint instead of the public OpenAI API (`AI_PROVIDER: azure`, `AZURE_ENDPOINT`, `AZURE_API_KEY`).           |
-| **Your repo holds several Business Central apps (plus docs and pipelines)** | Limits the diff to AL, XLF and app.json files and injects extra prompt text about AppSource rules, localisation, docfx docs and AL-Go YAML.                  |
-| **You care about context**                                                  | Automatically adds README/app.json files, linked issues and the latest AL-Guidelines to the prompt so the model can reason with more than just the raw diff. |
-| **You ship from `main` and run the check on every PR update**               | Triggers on `pull_request` events of type **opened** and **synchronize** against the `main` branch.                                                          |
-
-
-```yml
-name: AI Code Review (Azure OpenAI)
-
-on:
-  pull_request:
-    branches: [main]          # review PRs into main
-    types:    [opened, synchronize]
-
-permissions:
-  contents:       read
-  pull-requests:  write
-  issues:         read        # linked issues are added to the prompt
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0      # base & head commits are both needed for git diff
-
-      - name: Run AI Code Reviewer
-        uses: AidentErfurt/bc-ai-reviewer@main
-        with:
-          GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
-
-          # AI back-end (Azure OpenAI)
-          AI_PROVIDER:       azure
-          AZURE_ENDPOINT:    https://<your-resource>.openai.azure.com
-          AZURE_API_KEY:     ${{ secrets.AZURE_OPENAI_KEY }}
-          AZURE_API_VERSION: 2025-04-01-preview
-
-          # Separate base model vs deployment
-          AI_MODEL:          gpt-5              # base model name
-          AZURE_DEPLOYMENT:  reviewer-gpt5      # your deployment's friendly name
-
-          PROMPT_STYLE:      auto
-          REASONING_EFFORT:  high
-
-          # Review behaviour
-          MAX_COMMENTS:      0              # unlimited inline comments
-
-          # Prompt & repo context tweaks
-          BASE_PROMPT_EXTRA: |
-            You are reviewing **Business Central AppSource apps** plus supporting
-            docs (docfx) and AL-Go pipelines.  Priorities:
-              - correctness & performance of AL code
-              - adherence to AppSource requirements
-              - localisation quality in .xlf files
-              - pipeline clarity (GitHub Actions / YAML)
-
-          PROJECT_CONTEXT: |
-            This repository contains:
-              - several Business Central Apps
-              - docfx-based documentation
-              - an extended fork of AL-Go for GitHub
-            Goal: consistent quality gates across all apps with minimal noise.
-
-          # Diff scope filters
-          INCLUDE_PATTERNS:  "**/*.al,**/*.xlf,**/app.json"
-          EXCLUDE_PATTERNS:  ""
-
-          # Misc
-          FETCH_CLOSED_ISSUES:  false   # ignore already-closed issues
-
-```
-
-## OpenRouter.ai - Example 1
-
-| Why you’d use this example               | What it does                                                                                                                              |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **You just want to try the action quickly** | Uses the out-of-the-box defaults - no prompt tweaking, no file filters, no extra context.                                                 |
-| **You have an OpenRouter.ai API key**       | Points the reviewer at [OpenRouter](https://openrouter.ai/) (`AI_PROVIDER: openrouter`) with only **three** required parameters: model name, API key, and provider. |
-
-```yml
-name: AI Review (OpenRouter - minimal)
-
-on:
-  pull_request:
-    branches: [main]          # review PRs into main
-    types:    [opened, synchronize]
-
-permissions:
-  contents:       read
-  pull-requests:  write        # so the bot can add comments
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: AidentErfurt/bc-ai-reviewer@main
-        with:
-          GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
-
-          AI_PROVIDER:   openrouter
-          AI_MODEL:      microsoft/mai-ds-r1:free
-          AI_API_KEY:    ${{ secrets.OPENROUTER_API_KEY }}
-
-```
-
-## OpenRouter.ai - Example 2
-
-| Why you’d use this example                     | What it does                                                                                                                                                                                                |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **You want targeted, *context-aware* reviews** | Adds an *extra system prompt* (`BASE_PROMPT_EXTRA`) and high-level project description (`PROJECT_CONTEXT`) so the model judges changes against your own standards, not generic rules.                       |
-| **Your repo is a Business Central app**        | `AUTO_DETECT_APPS: true` automatically feeds each `app.json`, permission set, markdown doc & AL-Guidelines excerpts into the prompt, so the review understands your app architecture and BC best-practices. |
-| **You use OpenRouter**                   | Same three core AI inputs as the minimal example (`AI_PROVIDER`, `AI_MODEL`, `AI_API_KEY`)                                                                            |
-| **You only care about certain file types**     | `INCLUDE_PATTERNS` limits the diff to `*.al`, `*.rdlc`, `*.json` (skip pipelines, docs, etc.) which keeps token-usage low and feedback relevant.                                                            |
-| **You want to keep the noise down**            | `MAX_COMMENTS: 5` hard-caps inline comments; the action will still post a summary review.                                                                                                                   |
-| **You may want BC guideline details**          | `DISABLE_GUIDELINEDOCS: false` keeps automatic links to Microsoft AL-Guidelines in the context so the model can cite best-practice docs.                                                                    |
-| **You need linked issues for context**         | Workflow grants `issues: read`; the action will pull referenced issues/discussions into the prompt so the AI can spot if a change really closes what it claims to close.                                    |
-
-```yml
-name: AI Code Review (OpenRouter)
-
+```yaml
+# .github/workflows/review.yml
+name: AI Code Review
 on:
   pull_request:
     branches: [main]
-    types:    [opened, synchronize]
+    types: [opened, synchronize]
 
 permissions:
   contents: read
@@ -198,57 +39,199 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
       - name: Run AI Code Reviewer
-        uses: AidentErfurt/bc-ai-reviewer@main
+        uses: ./
         with:
-          GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
-
-          # AI back-end
-          AI_PROVIDER:    openrouter
-          AI_MODEL:       microsoft/mai-ds-r1:free
-          AI_API_KEY:     ${{ secrets.OPENROUTER_API_KEY }}
-
-          # Review behaviour
-          MAX_COMMENTS:   5
-
-          #  repo context tweaks
-          BASE_PROMPT_EXTRA: |
-            Your extra prompt
-          PROJECT_CONTEXT: |
-            This repository hosts a Business Central PTE app.
-          DISABLE_GUIDELINEDOCS: false
-          AUTO_DETECT_APPS:    true    # enable app.json discovery
-          INCLUDE_PATTERNS: "**/*.al,**/*.rdlc,**/*.json"
+          GITHUB_TOKEN: ${{ github.token }}
+          
+          MODELS_BLOCK: |
+            models:
+              - name: GPT-5 @Aident Azure OpenAI
+                provider: azure
+                model: gpt-5
+                apiBase: https://your-azure-resource.openai.azure.com/openai/v1
+                apiKey: ${{ secrets.AZURE_OPENAI_KEY }}
+                roles: [chat, edit, apply]
+                capabilities: [tool_use]
 ```
 
-## 💬 Contributing
+Placeholder substitution variant
 
-Issues and PRs are welcome! Please open a discussion first for major feature changes.
-All scripts are PowerShell 7.
+If you prefer not to interpolate secrets directly in a long MODELS_BLOCK, use placeholders and set runner env vars. The merge helper replaces `{{NAME}}` with `$env:NAME` before writing the merged config.
 
-## 🔒 Privacy & data flow
+```yaml
+- name: Run AI Code Reviewer (placeholders)
+  uses: ./
+  env:
+    AZURE_OPENAI_KEY: ${{ secrets.AZURE_OPENAI_KEY }}
+  with:
+    GITHUB_TOKEN: ${{ github.token }}
+    MODELS_BLOCK: |
+      models:
+        - name: GPT-5 @Aident (placeholder)
+          provider: azure
+          model: gpt-5
+          apiBase: https://your-azure-resource.openai.azure.com/openai/v1
+          apiKey: "{{AZURE_OPENAI_KEY}}"
+          roles: [chat, edit, apply]
+```
 
-This action sends **file paths, unified-diff hunks and any extra context files you specify** to the
-selected LLM endpoint (OpenAI, Azure OpenAI or OpenRouter).  
-That means a subset of your repository contents will **leave the GitHub
-environment and be processed by a third-party service**. Note that file paths & diff hunks may be logged by the provider for abuse-monitoring (per OpenAI/OpenRouter T&Cs)
+Notes about secrets & safety
+- Never commit real API keys or secrets into the repository. Use GitHub Secrets.
+- The merged config is written to the runner's temporary folder (`$RUNNER_TEMP`) and is not committed. For extra caution you can delete the temp file after the action; the action does not upload it.
+- The merge script performs placeholder substitution and will replace any `{{NAME}}` occurrences with the corresponding `env:NAME` value. If a placeholder has no matching env var, it will be replaced with an empty string by default (you can enable stricter validation if desired).
 
-Sensitive materials (credentials, customer data, unpublished crypto keys, …)
-should therefore **not** appear in pull-request diffs or context files.
+Recommended minimal action inputs / env handling
+- The composite action accepts these important inputs:
+  - GITHUB_TOKEN (required)
+  - MODELS_BLOCK (required per "always pass a model")
+  
 
-* OpenAI: see the official **API Data-Usage & Privacy policy**  
-  <https://openai.com/policies/api-data-usage-policies>
-* Azure OpenAI: see **Data, Privacy & Security for Azure OpenAI Service**  
-  <https://learn.microsoft.com/legal/cognitive-services/openai/data-privacy>
-* OpenRouter: see **Privacy, Logging, and Data Collection**  
-  <https://openrouter.ai/docs/features/privacy-and-logging>
+Inside the composite action we set only the necessary runner envs for the script: `GITHUB_TOKEN`, `MODELS_BLOCK`. Runner-provided vars like `GITHUB_REPOSITORY`, `GITHUB_EVENT_PATH`, and `RUNNER_TEMP` are used directly by the scripts and must not be overridden.
 
-The action never stores your code or prompts itself. Everything is streamed
-directly to the provider and the resulting review comments are written back to
-the pull request.
+Advanced: using a runtime models file
+- If your models block is large, you can create a YAML file in a previous step (injecting secrets via env) and then pass its content into `MODELS_BLOCK` (e.g., `MODELS_BLOCK: ${{ steps.write.outputs.models }}`). Alternatively, I can add a `MODELS_FILE` input if you prefer passing a path.
+
+Troubleshooting & tips
+- If the reviewer prints errors about `CONTINUE_CONFIG` being invalid, ensure the action sets `CONTINUE_CONFIG` to the merged config path (the composite action does this automatically).
+- If the model returns non-JSON or malformed JSON, the scripts attempt sanitisation and retries; inspect the uploaded CLI logs (artifact `.continue-logs/`) for raw provider output.
+- To debug the merged config safely, we can add a `debug_preview` option that prints the merged YAML with `apiKey` fields redacted. Ask me to enable that if you want.
+
+Where things live in this repo
+- action.yml — the composite action entry point (wires steps and inputs).
+- scripts/continue-review.ps1 — runner script that builds the prompt, calls the Continue CLI and posts GitHub reviews.
+- .github/actions/continue/default-config.yaml — bundled template used when merging models.
+- .github/actions/continue/merge-config.ps1 — runtime merge helper (replaces `models:` and substitutes placeholders).
+
+Contributing
+- PRs & issues welcome. For major feature requests please open a discussion first.
+
+License & privacy
+- Licensed under Apache 2.0. See LICENSE for details.
+- This action sends diffs and selected context to third-party LLM providers. Do not include secrets or sensitive PII in your PR diffs or context files.
+
+If you'd like, I can:
+- add strict validation to fail when required model fields (provider/model/apiKey) are missing after substitution, or
+- add `debug_preview` with redaction, or
+- add `MODELS_FILE` input so you can pass a checked-in non-secret models.yaml while injecting secrets at runtime.
+
+Pick one and I'll implement it next.
+
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+Run an AI-powered, Business Central-specific code review on pull requests. This repo contains a GitHub composite action that:
+
+- Collects the PR unified diff and optional context files (app.json, permission sets, markdowns, linked issues).
+- Sends a structured prompt to your chosen LLM provider (Azure OpenAI, OpenAI, OpenRouter.ai).
+- Posts a summary review and fine-grained inline comments on the PR.
+
+This branch includes a new "always-pass-a-model" workflow: you must supply a MODELS_BLOCK (multiline YAML) which completely replaces the built-in models: block. The action merges that block into the bundled default config at runtime, substitutes any placeholders from environment variables, writes a runner-local merged config, and runs the reviewer.
+
+Highlights
+- Opinionated defaults and rules are bundled in the action (default-config.yaml) so users get sensible behaviour out-of-the-box.
+- The MODELS_BLOCK input gives flexible model/provider selection (OpenAI, Azure, OpenRouter, local LLMs).
+- Secrets (apiKey, apiBase when secret) are never committed — provide them via GitHub Secrets and interpolate in the MODELS_BLOCK or expose as runner env placeholders.
+- Merge happens at runtime using `.github/actions/continue/merge-config.ps1` which substitutes placeholders of the form `{{NAME}}` from `env:NAME`.
+
+Quick concepts
+- MODELS_BLOCK (required): a multiline YAML string containing a `models:` array. It fully replaces the embedded `models:` section in default-config.yaml.
+- Merged config: the action writes a merged YAML to `$RUNNER_TEMP/continue-config.yaml` and sets `CONTINUE_CONFIG` to that path before invoking the existing review scripts.
+- Secrets: supply via `secrets.*` (interpolate directly in MODELS_BLOCK) or place placeholders like `apiKey: "{{AZURE_OPENAI_KEY}}"` and set the corresponding env var in the workflow.
+
+Minimal example (recommended): inline MODELS_BLOCK using interpolated secrets
+
+```yaml
+# .github/workflows/review.yml
+name: AI Code Review
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Run AI Code Reviewer
+        uses: ./
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+          
+          MODELS_BLOCK: |
+            models:
+              - name: GPT-5 @Aident Azure OpenAI
+                provider: azure
+                model: gpt-5
+                apiBase: https://your-azure-resource.openai.azure.com/openai/v1
+                apiKey: ${{ secrets.AZURE_OPENAI_KEY }}
+                roles: [chat, edit, apply]
+                capabilities: [tool_use]
+```
+
+Placeholder substitution variant
+
+If you prefer not to interpolate secrets directly in a long MODELS_BLOCK, use placeholders and set runner env vars. The merge helper replaces `{{NAME}}` with `$env:NAME` before writing the merged config.
+
+```yaml
+- name: Run AI Code Reviewer (placeholders)
+  uses: ./
+  env:
+    AZURE_OPENAI_KEY: ${{ secrets.AZURE_OPENAI_KEY }}
+  with:
+    GITHUB_TOKEN: ${{ github.token }}
+    MODELS_BLOCK: |
+      models:
+        - name: GPT-5 @Aident (placeholder)
+          provider: azure
+          model: gpt-5
+          apiBase: https://your-azure-resource.openai.azure.com/openai/v1
+          apiKey: "{{AZURE_OPENAI_KEY}}"
+          roles: [chat, edit, apply]
+```
+
+Notes about secrets & safety
+- Never commit real API keys or secrets into the repository. Use GitHub Secrets.
+- The merged config is written to the runner's temporary folder (`$RUNNER_TEMP`) and is not committed. For extra caution you can delete the temp file after the action; the action does not upload it.
+- The merge script performs placeholder substitution and will replace any `{{NAME}}` occurrences with the corresponding `env:NAME` value. If a placeholder has no matching env var, it will be replaced with an empty string by default (you can enable stricter validation if desired).
+
+Recommended minimal action inputs / env handling
+- The composite action accepts these important inputs:
+  - GITHUB_TOKEN (required)
+  - MODELS_BLOCK (required per "always pass a model")
+  
+
+Inside the composite action we set only the necessary runner envs for the script: `GITHUB_TOKEN`, `MODELS_BLOCK`. Runner-provided vars like `GITHUB_REPOSITORY`, `GITHUB_EVENT_PATH`, and `RUNNER_TEMP` are used directly by the scripts and must not be overridden.
+
+Advanced: using a runtime models file
+- If your models block is large, you can create a YAML file in a previous step (injecting secrets via env) and then pass its content into `MODELS_BLOCK` (e.g., `MODELS_BLOCK: ${{ steps.write.outputs.models }}`). Alternatively, I can add a `MODELS_FILE` input if you prefer passing a path.
+
+Troubleshooting & tips
+- If the reviewer prints errors about `CONTINUE_CONFIG` being invalid, ensure the action sets `CONTINUE_CONFIG` to the merged config path (the composite action does this automatically).
+- If the model returns non-JSON or malformed JSON, the scripts attempt sanitisation and retries; inspect the uploaded CLI logs (artifact `.continue-logs/`) for raw provider output.
+- To debug the merged config safely, we can add a `debug_preview` option that prints the merged YAML with `apiKey` fields redacted. Ask me to enable that if you want.
+
+Where things live in this repo
+- action.yml — the composite action entry point (wires steps and inputs).
+- scripts/continue-review.ps1 — runner script that builds the prompt, calls the Continue CLI and posts GitHub reviews.
+- .github/actions/continue/default-config.yaml — bundled template used when merging models.
+- .github/actions/continue/merge-config.ps1 — runtime merge helper (replaces `models:` and substitutes placeholders).
+
+Contributing
+- PRs & issues welcome. For major feature requests please open a discussion first.
+
+License & privacy
+- Licensed under Apache 2.0. See LICENSE for details.
+- This action sends diffs and selected context to third-party LLM providers. Do not include secrets or sensitive PII in your PR diffs or context files.
+

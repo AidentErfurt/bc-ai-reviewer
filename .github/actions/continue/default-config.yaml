@@ -1,0 +1,34 @@
+name: "continue-default"
+version: "1.0.0"
+schema: v1
+
+# Models intentionally omitted; supply via MODELS_BLOCK at runtime.
+
+# Context providers for PR/code review
+context:
+  - provider: file
+    # You can pass globs as params to limit what's selectable (optional)
+    params:
+      include:
+        - "**/*.al"
+      exclude: []
+  - provider: diff
+  - provider: repo-map
+    params:
+      includeSignatures: false
+  - provider: currentFile
+  - provider: open
+    params:
+      onlyPinned: true
+  - provider: problems
+  - provider: terminal
+
+rules:
+  - uses: file://.continue/rules/pr-reviewer.md
+
+prompts:
+  - uses: file://.continue/prompts/review-pr.md
+
+docs: []
+mcpServers: []
+data: []
