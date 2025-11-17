@@ -17,7 +17,6 @@ param(
   [bool]$IncludeAppMarkdown = $true,
   [string]$BasePromptExtra = "",
   [switch]$ApproveReviews,
-  [switch]$LogPrompt,
   [switch]$DebugPayload,
   [switch]$DryRun
 )
@@ -572,12 +571,6 @@ $(( $bcObjects | ConvertTo-Json -Depth 5 ))
 $(( $previousComments | ConvertTo-Json -Depth 4 ))
 "@ | Set-Content -Path $tempPrompt -Encoding UTF8
 
-if ($LogPrompt) {
-  Write-Host "::group::Prompt preview"
-  Get-Content $tempPrompt -Raw | Write-Host
-  Write-Host "::endgroup::"
-}
-
 ############################################################################
 # Continue runner (single impl) — slug-only, no URL rewriting, stable Hub base
 ############################################################################
@@ -678,6 +671,7 @@ function Invoke-ContinueCli {
   # Parse the CLI JSON output produced by the model run and return it
   return Get-JsonFromText -Text $stdout
 }
+
 
 
 

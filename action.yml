@@ -79,11 +79,6 @@ inputs:
     type: string
     default: ""
 
-  LOG_PROMPT:
-    description: "Log prompt JSON (redacted) to runner logs"
-    type: boolean
-    default: false
-
   DEBUG_PAYLOAD:
     description: "When true, prints the full JSON payload (continue_input.json) to the Actions log in a collapsible group. Use for debugging only; can be large and may expose secrets."
     type: boolean
@@ -137,7 +132,6 @@ runs:
           BasePromptExtra       = "${{ inputs.BASE_PROMPT_EXTRA }}"
         }
         if ("${{ inputs.APPROVE_REVIEWS }}" -eq "true") { $params.ApproveReviews = $true }
-        if ("${{ inputs.LOG_PROMPT }}" -eq "true")      { $params.LogPrompt      = $true }
         if ("${{ inputs.DEBUG_PAYLOAD }}" -eq "true")   { $params.DebugPayload   = $true }
 
 
