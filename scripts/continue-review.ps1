@@ -152,8 +152,6 @@ if ($env:GITHUB_EVENT_NAME -eq 'issue_comment' -and $evt.issue -and $evt.issue.p
   } catch {
     Write-Warning ("Failed to enrich event payload for issue_comment trigger: {0}" -f $_)
   }
-} catch {
-  throw "Failed to parse GitHub event payload: $($_.Exception.Message)"
 }
 
 if (-not $evt.pull_request) { Write-Warning "No pull_request payload. Exiting."; return }
