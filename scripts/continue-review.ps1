@@ -668,8 +668,26 @@ function Invoke-ContinueCli {
     throw ("Continue CLI failed (exit {0})." -f $exit)
   }
 
-  # Parse the CLI JSON output produced by the model run and return it
-  return Get-JsonFromText -Text $stdout
+    # Parse the CLI JSON output produced by the model run
+    $parsed = Get-JsonFromText -Text $stdout
+
+    # Happy-path heuristic:
+    # If cn returns an array like ["{", "  \"summary\": ...", "}", { actualObject }, ...],
+    # pick the last object-shaped element that looks like a review.
+    if ($parsed -is [System.Collections.IEnumerable] -and -not ($parsed -is [string])) {
+        $candidates = @($parsed) | Where-Object {
+            $_ -isnot [string] -and
+            $_.PSObject.Properties.Name -contains 'summary' -and
+            $_.PSObject.Properties.Name -contains 'comments'
+        }
+
+        if ($candidates.Count -gt 0) {
+            return $candidates[-1]
+        }
+    }
+
+    # Default: just return what we parsed
+    return $parsed
 }
 
 
@@ -683,6 +701,7 @@ try {
 } catch {
   throw "Continue run failed: $($_.Exception.Message)"
 }
+
 
 ############################################################################
 # Normalize and validate model output
@@ -711,28 +730,19 @@ if (
   $review | Add-Member -NotePropertyName suggestedAction -NotePropertyValue 'comment' -Force
 }
 
-# Normalize comments into a predictable array shape
-$rawComments = $review.comments
-if (-not $rawComments) {
-  $rawComments = @()
-} elseif (-not ($rawComments -is [System.Collections.IEnumerable])) {
-  $rawComments = @($rawComments)
-}
+# Normalize comments into a predictable array shape (happy path)
+$rawComments = @($review.comments)
 
-$normalizedComments = @()
-foreach ($c in $rawComments) {
-  if (-not $c) { continue }
-  $path   = $c.path
-  $line   = $c.line
-  $remark = $c.remark
-
-  if (-not $path -or -not $line -or -not $remark) { continue }
-  $normalizedComments += $c
+$normalizedComments = $rawComments | Where-Object {
+    $_ -and $_.path -and $_.line -and $_.remark
 }
 
 $review | Add-Member -NotePropertyName comments -NotePropertyValue $normalizedComments -Force
 
-Write-Host ("Model returned {0} comment(s); using {1} after normalization." -f ($rawComments.Count), ($normalizedComments.Count))
+Write-Host ("Model returned {0} comment(s); using {1} after normalization." -f `
+    $rawComments.Count, $normalizedComments.Count)
+
+############################################################################
 
 # Dry-run: show the result and skip all GitHub write operations
 if ($DryRun) {
