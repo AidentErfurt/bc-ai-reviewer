@@ -137,7 +137,8 @@ if ($env:GITHUB_EVENT_NAME -eq 'issue_comment' -and $evt.issue -and $evt.issue.p
     Write-Host "issue_comment on PR #$prNumber detected; fetching PR to synthesize pull_request payload."
     $pr = Get-PR -Owner $owner -Repo $repo -PrNumber $prNumber
     if ($pr) {
-      $evt.pull_request = $pr
+      $evt | Add-Member -NotePropertyName 'pull_request' -NotePropertyValue $pr -Force
+
       try {
         # Overwrite the event file so subsequent steps/actions see the enriched payload
         $evt | ConvertTo-Json -Depth 10 | Set-Content -Path $evtPath -Encoding UTF8
@@ -149,8 +150,10 @@ if ($env:GITHUB_EVENT_NAME -eq 'issue_comment' -and $evt.issue -and $evt.issue.p
       Write-Warning "Could not fetch PR #$prNumber to inject into event payload."
     }
   } catch {
-    Write-Warning ("Failed to fetch PR for issue_comment trigger: {0}" -f $_)
+    Write-Warning ("Failed to enrich event payload for issue_comment trigger: {0}" -f $_)
   }
+} catch {
+  throw "Failed to parse GitHub event payload: $($_.Exception.Message)"
 }
 
 if (-not $evt.pull_request) { Write-Warning "No pull_request payload. Exiting."; return }
