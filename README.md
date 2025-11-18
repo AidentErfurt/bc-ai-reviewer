@@ -18,43 +18,77 @@ Run an AI-powered, Business Central-specific code review on pull requests. This 
 - Merged config: the action writes a merged YAML to `$RUNNER_TEMP/continue-config.yaml` and sets `CONTINUE_CONFIG` to that path before invoking the review scripts.
 - Secrets: supply via `secrets.*` (interpolate directly in MODELS_BLOCK) or use placeholders like `apiKey: "{{AZURE_OPENAI_KEY}}"` and set corresponding env vars in the workflow.
 
-## Minimal example (recommended): inline MODELS_BLOCK using interpolated secrets
+## Example workflow
 
 ```yaml
-# .github/workflows/review.yml
-name: AI Code Review
+name: "BC Code Reviewer"
 on:
   pull_request:
-    branches: [main]
-    types: [opened, synchronize]
+    branches: [ main ]
+    types: [ opened, reopened, ready_for_review ]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
 
 permissions:
   contents: read
   pull-requests: write
-  issues: read
 
 jobs:
   review:
+    # Only run if this is a pull_request event or an issue_comment on a PR that includes '/review'
+    if: >
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       contains(github.event.comment.body, '/review'))
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
 
-      - name: Run AI Code Reviewer
-        uses: ./
+    # Optional but recommended to avoid overlapping runs on the same PR
+    concurrency:
+      group: ai-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run AI Code Review
+        uses: AidentErfurt/bc-ai-reviewer@main
         with:
           GITHUB_TOKEN: ${{ github.token }}
-
           MODELS_BLOCK: |
             models:
-              - name: GPT-5 @Aident Azure OpenAI
+              - name: GPT-5 @Azure OpenAI w Responses API
                 provider: azure
                 model: gpt-5
-                apiBase: https://your-azure-resource.openai.azure.com/openai/v1
+                apiBase: https://your-azure-resource.openai.azure.com/openai/v1 # use a secret here
                 apiKey: ${{ secrets.AZURE_OPENAI_KEY }}
                 roles: [chat, edit, apply]
-                capabilities: [tool_use]
+                requestOptions:
+                  extraBodyProperties:
+                    reasoning:
+                      effort: high
+
+          # Review configuration
+          MAX_COMMENTS: 20
+          AUTO_DETECT_APPS: true
+          INCLUDE_APP_PERMISSIONS: true
+          INCLUDE_APP_MARKDOWN: true
+          INCLUDE_PATTERNS: "**/*.al,**/*.json"
+          EXCLUDE_PATTERNS: ""
+          CONTEXT_FILES: ""
+          ISSUE_COUNT: 0
+          FETCH_CLOSED_ISSUES: true
+          BASE_PROMPT_EXTRA: ""
+          DEBUG_PAYLOAD: true
+          PROJECT_CONTEXT: |
+            Repository contains Business Central AppSource Apps, related documentation based on docfx, and a slightly extended version of AL-Go for GitHub.
 ```
+
+Note: The review can be re-triggered by commenting `/review` on the pull request (issue_comment event).
 
 ## Composite Action Inputs
 
