@@ -18,7 +18,8 @@ param(
   [string]$BasePromptExtra = "",
   [switch]$ApproveReviews,
   [switch]$DebugPayload,
-  [switch]$DryRun
+  [switch]$DryRun,
+  [int]$SnippetContextLines = 12
 )
 
 
@@ -217,31 +218,72 @@ foreach ($f in $files) {
 
 if (-not $relevant) { Write-Host "No relevant files after globs; exiting."; return }
 
-# Build commentable line whitelist (HEAD/right only), and number-prefixed diffs
-$validLines    = @{}
+# Build commentable line whitelist (HEAD/right only), and richer numbered snippets
+$validLines = @{}
 $numberedFiles = @()
 
 foreach ($f in $relevant) {
-  $lines = foreach ($chunk in $f.chunks) {
-    foreach ($chg in $chunk.changes) {
-      if ($chg.ln2) { "{0} {1}" -f $chg.ln2, $chg.content }
-    }
-  }
+    $path = $f.path
 
-  $validLines[$f.path] = @(
-    foreach ($chunk in $f.chunks) {
-      foreach ($chg in $chunk.changes) {
-        if ($chg.ln2) { [int]$chg.ln2 }
-      }
-    }
-  ) | Sort-Object -Unique
+    # 1) Collect HEAD/RIGHT line numbers from the diff
+    $headLineNumbers = @(
+        foreach ($chunk in $f.chunks) {
+            foreach ($chg in $chunk.changes) {
+                if ($chg.ln2) { [int]$chg.ln2 }
+            }
+        }
+    ) | Sort-Object -Unique
 
-  $numberedFiles += [pscustomobject]@{
-    path = $f.path
-    diff = ($lines -join "`n")
-  }
+    $validLines[$path] = $headLineNumbers
+
+    # 2) Try to build a rich snippet from the HEAD file on disk
+    $richLines = @()
+    $fileContent = Get-FileContent -Owner $owner -Repo $repo -Path $path -RefSha $headSha
+
+    if ($fileContent -and $headLineNumbers.Count -gt 0) {
+        $fileLines = $fileContent -split "`r?`n"
+
+        if ($fileLines.Length -gt 0) {
+            # Use a HashSet<int> so each physical line appears only once,
+            # even if multiple changed lines are close together.
+            $lineIndexes = [System.Collections.Generic.HashSet[int]]::new()
+
+            foreach ($ln in $headLineNumbers) {
+                if ($ln -le 0 -or $ln -gt $fileLines.Length) { continue }
+
+                $start = [Math]::Max(1, $ln - $SnippetContextLines)
+                $end   = [Math]::Min($fileLines.Length, $ln + $SnippetContextLines)
+
+                for ($i = $start; $i -le $end; $i++) {
+                    [void]$lineIndexes.Add($i)
+                }
+            }
+
+            if ($lineIndexes.Count -gt 0) {
+                foreach ($i in ($lineIndexes.ToArray() | Sort-Object)) {
+                    $text = $fileLines[$i - 1]
+                    $richLines += ("{0} {1}" -f $i, $text)
+                }
+            }
+        }
+    }
+
+    # 3) Fallback: if for some reason we couldn't read the file,
+    #    use the original diff-based snippet (current behavior).
+    if (-not $richLines -or $richLines.Count -eq 0) {
+        $richLines = foreach ($chunk in $f.chunks) {
+            foreach ($chg in $chunk.changes) {
+                if ($chg.ln2) { "{0} {1}" -f $chg.ln2, $chg.content }
+            }
+        }
+    }
+
+    $numberedFiles += [pscustomobject]@{
+        path = $path
+        diff = ($richLines -join "`n")
+    }
 }
-
+Write-Host ("Prepared {0} relevant changed file(s) for review." -f $numberedFiles.Count)
 
 ############################################################################
 # Optional: gather app context and extra globs
