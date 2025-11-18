@@ -734,7 +734,7 @@ function Invoke-ContinueCli {
 
   # Invoke Continue CLI and stream output to runner while saving to a temp file for parsing
   $tempCnOut = Join-Path $env:RUNNER_TEMP 'continue_cn_out.log'
-  $reviewPromptPath = Join-Path $env:GITHUB_WORKSPACE '.continue\prompts\review-pr.md'
+  $reviewPromptPath = Join-Path $env:GITHUB_ACTION_PATH '.continue\prompts\review-pr.md'
   if (-not (Test-Path $reviewPromptPath)) {
     throw "Review prompt file not found at '$reviewPromptPath'"
   }
