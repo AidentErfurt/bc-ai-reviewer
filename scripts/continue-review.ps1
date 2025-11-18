@@ -730,16 +730,37 @@ function Invoke-ContinueCli {
   $tempPromptFile = Join-Path $env:RUNNER_TEMP 'continue_prompt.txt'
   $Prompt | Set-Content -Path $tempPromptFile -Encoding UTF8
 
+  # ------------------ Locate review-pr.md ------------------
+  $reviewPromptPath = $null
+
+  if ($env:GITHUB_ACTION_PATH) {
+    # When running as a composite action on GitHub-hosted runners
+    $reviewPromptPath = Join-Path $env:GITHUB_ACTION_PATH '.continue/prompts/review-pr.md'
+  } elseif ($env:GITHUB_WORKSPACE) {
+    # Fallback: assume .continue lives in the workspace (e.g. local experiments)
+    $reviewPromptPath = Join-Path $env:GITHUB_WORKSPACE '.continue/prompts/review-pr.md'
+  } else {
+    # Last resort: resolve relative to this script location
+    $scriptRoot = Split-Path -Parent $PSCommandPath
+    $repoRoot   = Split-Path -Parent $scriptRoot
+    $reviewPromptPath = Join-Path $repoRoot '.continue/prompts/review-pr.md'
+  }
+
+  Write-Host "Resolved review prompt path: $reviewPromptPath"
+
+  if (-not (Test-Path -LiteralPath $reviewPromptPath)) {
+    throw "Review prompt file not found at '$reviewPromptPath'"
+  }
+
   Write-Host "Running Continue CLI..."
 
   # Invoke Continue CLI and stream output to runner while saving to a temp file for parsing
   $tempCnOut = Join-Path $env:RUNNER_TEMP 'continue_cn_out.log'
-  $reviewPromptPath = Join-Path $env:GITHUB_ACTION_PATH '.continue\prompts\review-pr.md'
-  if (-not (Test-Path $reviewPromptPath)) {
-    throw "Review prompt file not found at '$reviewPromptPath'"
-  }
-    # Use Tee-Object so cn's output is both printed to the runner log and written to a file
-  & cn --prompt $reviewPromptPath --verbose --config $Config -p (Get-Content -Raw $tempPromptFile) --auto 2>&1 | Tee-Object -FilePath $tempCnOut
+
+  & cn --prompt $reviewPromptPath --verbose --config $Config `
+       -p (Get-Content -Raw $tempPromptFile) --auto 2>&1 |
+    Tee-Object -FilePath $tempCnOut
+
   $exit = $LASTEXITCODE
   $stdout = if (Test-Path $tempCnOut) { Get-Content -Raw $tempCnOut } else { "" }
 
@@ -747,30 +768,26 @@ function Invoke-ContinueCli {
     throw ("Continue CLI failed (exit {0})." -f $exit)
   }
 
-    # Parse the CLI JSON output produced by the model run
-    $parsed = Get-JsonFromText -Text $stdout
+  # Parse the CLI JSON output produced by the model run
+  $parsed = Get-JsonFromText -Text $stdout
 
-    # Happy-path heuristic:
-    # If cn returns an array like ["{", "  \"summary\": ...", "}", { actualObject }, ...],
-    # pick the last object-shaped element that looks like a review.
-    if ($parsed -is [System.Collections.IEnumerable] -and -not ($parsed -is [string])) {
-        $candidates = @($parsed) | Where-Object {
-            $_ -isnot [string] -and
-            $_.PSObject.Properties.Name -contains 'summary' -and
-            $_.PSObject.Properties.Name -contains 'comments'
-        }
-
-        if ($candidates.Count -gt 0) {
-            return $candidates[-1]
-        }
+  # Happy-path heuristic:
+  # If cn returns an array like ["{", "  \"summary\": ...", "}", { actualObject }, ...],
+  # pick the last object-shaped element that looks like a review.
+  if ($parsed -is [System.Collections.IEnumerable] -and -not ($parsed -is [string])) {
+    $candidates = @($parsed) | Where-Object {
+      $_ -isnot [string] -and
+      $_.PSObject.Properties.Name -contains 'summary' -and
+      $_.PSObject.Properties.Name -contains 'comments'
     }
 
-    # Default: just return what we parsed
-    return $parsed
+    if ($candidates.Count -gt 0) {
+      return $candidates[-1]
+    }
+  }
+
+  return $parsed
 }
-
-
-
 
 # ---------- Execute ----------
 $promptText = Get-Content $tempPrompt -Raw
