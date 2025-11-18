@@ -79,7 +79,7 @@ inputs:
     type: string
     default: ""
 
-    DEBUG_PAYLOAD:
+  DEBUG_PAYLOAD:
     description: "When true, prints the full JSON payload (continue_input.json) to the Actions log in a collapsible group. Use for debugging only; can be large and may expose secrets."
     type: boolean
     default: false
@@ -88,8 +88,6 @@ inputs:
     description: "Number of context lines to include around each changed line when building rich snippets"
     type: number
     default: 12
-
-
 
 runs:
   using: composite
