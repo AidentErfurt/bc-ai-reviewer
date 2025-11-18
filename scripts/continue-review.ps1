@@ -225,7 +225,7 @@ $numberedFiles = @()
 foreach ($f in $relevant) {
     $path = $f.path
 
-    # 1) Collect HEAD/RIGHT line numbers from the diff
+    # 1) Collect HEAD/RIGHT line numbers from the diff (unchanged behavior)
     $headLineNumbers = @(
         foreach ($chunk in $f.chunks) {
             foreach ($chg in $chunk.changes) {
@@ -244,9 +244,8 @@ foreach ($f in $relevant) {
         $fileLines = $fileContent -split "`r?`n"
 
         if ($fileLines.Length -gt 0) {
-            # Use a HashSet<int> so each physical line appears only once,
-            # even if multiple changed lines are close together.
-            $lineIndexes = [System.Collections.Generic.HashSet[int]]::new()
+            # Collect all line numbers to include (changed lines +/- SnippetContextLines)
+            $lineIndexes = @()
 
             foreach ($ln in $headLineNumbers) {
                 if ($ln -le 0 -or $ln -gt $fileLines.Length) { continue }
@@ -255,15 +254,16 @@ foreach ($f in $relevant) {
                 $end   = [Math]::Min($fileLines.Length, $ln + $SnippetContextLines)
 
                 for ($i = $start; $i -le $end; $i++) {
-                    [void]$lineIndexes.Add($i)
+                    $lineIndexes += $i
                 }
             }
 
-            if ($lineIndexes.Count -gt 0) {
-                foreach ($i in ($lineIndexes.ToArray() | Sort-Object)) {
-                    $text = $fileLines[$i - 1]
-                    $richLines += ("{0} {1}" -f $i, $text)
-                }
+            # De-duplicate and sort the line numbers
+            $lineIndexes = $lineIndexes | Sort-Object -Unique
+
+            foreach ($i in $lineIndexes) {
+                $text = $fileLines[$i - 1]
+                $richLines += ("{0} {1}" -f $i, $text)
             }
         }
     }
@@ -283,6 +283,7 @@ foreach ($f in $relevant) {
         diff = ($richLines -join "`n")
     }
 }
+
 Write-Host ("Prepared {0} relevant changed file(s) for review." -f $numberedFiles.Count)
 
 ############################################################################
