@@ -79,10 +79,16 @@ inputs:
     type: string
     default: ""
 
-  DEBUG_PAYLOAD:
+    DEBUG_PAYLOAD:
     description: "When true, prints the full JSON payload (continue_input.json) to the Actions log in a collapsible group. Use for debugging only; can be large and may expose secrets."
     type: boolean
     default: false
+
+  SNIPPET_CONTEXT_LINES:
+    description: "Number of context lines to include around each changed line when building rich snippets"
+    type: number
+    default: 12
+
 
 
 runs:
@@ -130,6 +136,7 @@ runs:
           IncludeAppPermissions = [bool]::Parse("${{ inputs.INCLUDE_APP_PERMISSIONS }}")
           IncludeAppMarkdown    = [bool]::Parse("${{ inputs.INCLUDE_APP_MARKDOWN }}")
           BasePromptExtra       = "${{ inputs.BASE_PROMPT_EXTRA }}"
+          SnippetContextLines   = [int]"${{ inputs.SNIPPET_CONTEXT_LINES }}"
         }
         if ("${{ inputs.APPROVE_REVIEWS }}" -eq "true") { $params.ApproveReviews = $true }
         if ("${{ inputs.DEBUG_PAYLOAD }}" -eq "true")   { $params.DebugPayload   = $true }

@@ -456,7 +456,7 @@ foreach ($f in $relevant) {
 
 }
 
-Write-Host ("Discovered {0} bcObjects" -f $bcObjects.Count)
+Write-Host ("Discovered {0} changed objects" -f $bcObjects.Count)
 if ($DebugPayload -and $bcObjects.Count -gt 0) {
   Write-Host "::group::DEBUG: bcObjects (parsed)"
   try {
