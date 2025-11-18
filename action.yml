@@ -156,3 +156,16 @@ runs:
 
         & "${{ github.action_path }}/scripts/continue-review.ps1" @params
 
+        # Cleanup: remove the merged config file written to the runner temp
+        try {
+          if (Test-Path $cfgPath) {
+            Remove-Item -LiteralPath $cfgPath -Force -ErrorAction SilentlyContinue
+            Write-Host "Removed merged config file at $cfgPath"
+          }
+          # Unset CONTINUE_CONFIG from the environment (process scope) and Env: drive
+          Remove-Item Env:CONTINUE_CONFIG -ErrorAction SilentlyContinue
+          [Environment]::SetEnvironmentVariable('CONTINUE_CONFIG', $null, 'Process')
+        } catch {
+          Write-Warning "Failed to delete merged config file: $_"
+        }
+
