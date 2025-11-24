@@ -116,8 +116,8 @@ These inputs are defined in action.yml (defaults in parentheses).
 
 ## Runtime behavior (what the action does)
 
-- Installs Node.js v20, `parse-diff`, and the Continue CLI; optionally installs `uv` for MCP integration.
-- Merges MODELS_BLOCK into the bundled default-config.yaml at runtime via `.github/actions/continue/merge-config.ps1`, writes the merged file to `$RUNNER_TEMP`, and sets `CONTINUE_CONFIG`.
+- Installs Node.js v20, `parse-diff`, and the [Continue CLI](https://docs.continue.dev/guides/cli); optionally installs `uv` for MCP integration.
+- Merges continue [MODELS_BLOCK](https://docs.continue.dev/reference#models) into the bundled default-config.yaml at runtime via `.github/actions/continue/merge-config.ps1`, writes the merged file to `$RUNNER_TEMP`, and sets `CONTINUE_CONFIG`.
 - Executes `scripts/continue-review.ps1` which:
   - Fetches the PR unified diff and parses it with `scripts/parse-diff.js`.
   - Filters changed files by INCLUDE_PATTERNS/EXCLUDE_PATTERNS.
@@ -130,7 +130,7 @@ These inputs are defined in action.yml (defaults in parentheses).
 
 - If the reviewer prints errors about `CONTINUE_CONFIG` being invalid, ensure the action sets it to the merged config path (the composite action does this automatically).
 - If the model returns non-JSON or malformed JSON, the scripts attempt sanitisation and retries; inspect the uploaded CLI logs (artifact `.continue-logs/`) for raw provider output.
-- Never commit real API keys or secrets. Use GitHub Secrets. The merged config is written to `$RUNNER_TEMP` and is not committed; you may delete it after the run.
+- Never commit real API keys or secrets. Use GitHub Secrets. The merged config is written to `$RUNNER_TEMP` and is not committed.
 
 ## Where things live in this repo
 
@@ -148,5 +148,3 @@ These inputs are defined in action.yml (defaults in parentheses).
 
 - Licensed under Apache 2.0. See LICENSE for details.
 - This action sends diffs and selected context to third-party LLM providers. Do not include secrets or sensitive PII in your PR diffs or context files.
-
-
