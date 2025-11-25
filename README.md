@@ -10,8 +10,7 @@ Run an AI-powered, Business Central-specific code review on pull requests. This 
 
 ## Highlights
 - Opinionated defaults and rules are bundled in the action (default-config.yaml) for sensible behaviour out of the box.
-- MODELS_BLOCK enables flexible model/provider selection (OpenAI, Azure, OpenRouter, local LLMs).
-- Secrets (apiKey, apiBase if secret) are never committed — provide them via GitHub Secrets and either interpolate in MODELS_BLOCK or use 
+- MODELS_BLOCK enables flexible model/provider selection (OpenAI, Azure Foundry, OpenRouter, ...).
 
 ## Quick concepts
 - MODELS_BLOCK (required): a multiline YAML string containing a `models:` array. It fully replaces the embedded `models:` section in default-config.yaml.
