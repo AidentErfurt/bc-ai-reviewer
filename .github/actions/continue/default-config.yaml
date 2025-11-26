@@ -32,6 +32,6 @@ prompts:
 docs: []
 mcpServers:
   - name: "Microsoft Learn Docs"
-    type: http
+    type: sse
     url: "https://learn.microsoft.com/api/mcp"
 data: []
