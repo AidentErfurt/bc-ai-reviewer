@@ -512,15 +512,6 @@ $previousComments = @(
 $hasPreviousComments = $previousComments.Count -gt 0
 
 $reviewContract = @"
-You are a **senior Dynamics 365 Business Central AL architect and code reviewer**.
-
-Your goals:
-
-- Produce a **Business Central-aware, professional PR review** that:
-  - Follows ALGuidelines.dev (AL Guidelines / Vibe Coding Rules) and official AL analyzers (CodeCop, PerTenantExtensionCop, AppSourceCop, UICop).
-  - Evaluates both **code quality** and **business process impact** (posting, journals, VAT, dimensions, approvals, inventory, pricing, etc.).
-  - Provides **short, actionable inline comments** plus a single, high-quality markdown review.
-
 You will be given (in the prompt body):
 
 - `files`: changed files with **numbered diffs**.
@@ -528,9 +519,11 @@ You will be given (in the prompt body):
 - `contextFiles`: additional files (e.g. `app.json`, permission sets, markdown docs) for reasoning only.
 - `bcObjects`: parsed AL object metadata per file (objectType, id, name, PageType, ApplicationArea, UsageCategory, SourceTable, namespace, usings).
 - `pullRequest`: title, description, and SHAs.
-
 - `projectContext`: optional extra context from the workflow.
 - `previousComments`: earlier PR review comments for context (if any).
+
+Your reviewer persona, Business Central–specific rules, and review axes are defined in the main Continue prompt (`Review PR`) and its rules.
+**This contract only defines the required JSON output and how to interpret the data above.**
 
 Return **only this JSON object** (no markdown fences, no extra text):
 
@@ -549,7 +542,6 @@ Return **only this JSON object** (no markdown fences, no extra text):
 }
 
 Requirements for `summary`:
-
 - It is the **primary review output** and should stand alone as a professional review.
 - Use the headings exactly:
   - `### Summary`
@@ -574,10 +566,9 @@ Requirements for `summary`:
 - Do **not** include raw JSON or the `validLines`/`files` structures in the markdown.
 
 Requirements for `comments`:
-
 - Use at most $maxInline comments; prioritize **blockers**, correctness, upgrade risks, and business process impact.
-- Don't duplicate earlier comments (previousComments). Don't repeat these inline; if they’re still relevant, mention that in Summary instead.
-- comments: [] is valid and recommended when there’s nothing new and high-value.
+- Don't duplicate earlier comments (`previousComments`). Don't repeat these inline; if they’re still relevant, mention that in `summary` instead.
+- `comments: []` is valid and recommended when there’s nothing new and high-value.
 - Each comment object has:
   - `path`: file path from the diff. Must match a file present in `files`.
   - `line`: a line number taken only from `validLines[path]` (these are HEAD/RIGHT line numbers from the diff).
@@ -585,14 +576,14 @@ Requirements for `comments`:
   - `suggestion`: optional AL replacement snippet (≤ 6 lines). **No backticks**, no `suggestion` label; the caller will wrap it in the correct GitHub ```suggestion``` block.
 - If there is no safe, minimal replacement, set `suggestion` to an empty string.
 
-
 Additional constraints:
-
 - Do not reference `contextFiles` by path or filename in comments; they are for your reasoning only.
 - When you are unsure about business impact, say so explicitly in the **Summary** and state your assumption (e.g., “Assuming this codeunit is only used for internal tools…”).
 - If there are more potential comments than the allowed limit, aggregate the extra feedback into the `summary` under the appropriate headings.
+
 $BasePromptExtra
 "@
+
 
 $payload = @{
   files          = $numberedFiles
