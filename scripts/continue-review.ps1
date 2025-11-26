@@ -539,7 +539,7 @@ Return **only this JSON object** (no markdown fences, no extra text):
   ],
   "sources": [
     {
-      "type": "docs | repo | assumption",
+      "type": "docs",
       "description": "Short human-readable explanation of the source or assumption.",
       "url": "Optional URL (for docs/external resources); empty string if not applicable."
     }
@@ -854,6 +854,11 @@ $normalizedComments = $rawComments | Where-Object {
     $_ -and $_.path -and $_.line -and $_.remark
 }
 
+# Normalize sources to an array (for consistency)
+if (-not ($review.PSObject.Properties.Name -contains 'sources') -or -not $review.sources) {
+  $review | Add-Member -NotePropertyName sources -NotePropertyValue @() -Force
+}
+
 $review | Add-Member -NotePropertyName comments -NotePropertyValue $normalizedComments -Force
 
 Write-Host ("Model returned {0} comment(s); using {1} after normalization." -f `
@@ -902,7 +907,6 @@ Write-Host ("Continue suggestedAction: {0} -> GitHub review event: {1}" -f `
 
 # Footer to credit engine/config (non-blocking)
 $footer = "`n`n---`n_Review powered by [Continue CLI](https://github.com/continuedev/continue) and [bc-ai-reviewer](https://github.com/AidentErfurt/bc-ai-reviewer)_."
-
 # Optional "Sources" section (if model returned any)
 $sourceSection = ""
 if ($review.PSObject.Properties.Name -contains 'sources' -and $review.sources) {
@@ -920,6 +924,8 @@ if ($review.PSObject.Properties.Name -contains 'sources' -and $review.sources) {
     }
 
     $sourceSection = "`n`n#### Sources`n" + ($sourceLines -join "`n")
+  } else {
+    Write-Host "No valid sources returned by the model."
   }
 }
 

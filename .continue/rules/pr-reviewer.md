@@ -144,7 +144,7 @@ If the docs don’t match the code you see (version drift), state that explicitl
 When you rely on external documentation (such as Microsoft Learn docs for base application objects) or other non-repo sources:
 
 - Mention the key sources.
-- At the end of the JSON, populate the `sources` array:
+- In the JSON response, populate the `sources` array:
     - Add a `docs` entry when you rely on Microsoft Learn docs or other external documentation.
     - Add a `repo` entry when your reasoning depends strongly on existing code/config in this repository.
     - Add an `assumption` entry when you had to make a non-trivial assumption due to missing context.
