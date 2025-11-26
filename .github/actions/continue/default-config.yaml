@@ -30,5 +30,8 @@ prompts:
   - uses: file://.continue/prompts/review-pr.md
 
 docs: []
-mcpServers: []
+mcpServers:
+  - name: "Microsoft Learn Docs"
+    type: http
+    url: "https://learn.microsoft.com/api/mcp"
 data: []
