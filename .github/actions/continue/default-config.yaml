@@ -31,7 +31,12 @@ prompts:
 
 docs: []
 mcpServers:
-  - name: "Microsoft Learn Docs"
-    type: sse
-    url: "https://learn.microsoft.com/api/mcp"
+  - name: "microsoft-learn"
+    type: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "mcp-remote"
+      - "https://learn.microsoft.com/api/mcp"
+    autoConnect: true
 data: []
