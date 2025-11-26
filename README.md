@@ -8,6 +8,17 @@ Run an AI-powered, Business Central-specific code review on pull requests. This 
 - Sends a structured prompt to your chosen LLM provider (Azure OpenAI, OpenAI, OpenRouter.ai).
 - Posts a summary review and fine-grained inline comments on the PR.
 
+## Why this is Business Central–specific
+
+This action is not a generic code reviewer. It is tailored for Business Central AL projects:
+
+- It only reviews AL and BC app artifacts (`**/*.al`, `app.json`, permission sets, markdown docs) and builds deterministic BC object metadata from the HEAD version of your files.
+- The review prompt is grounded in AL Guidelines [ALGuidelines.dev](https://alguidelines.dev/) and standard BC design patterns (event-driven extensibility, AL-Go structure, upgrade codeunits, etc.).
+- Feedback is BC domain-aware: posting routines, journals, ledgers, dimensions, VAT/currencies, inventory costing, approvals, permissions, data classification, AppSource vs. Per-Tenant rules, and SaaS/multi-tenant safety are all first-class concerns.
+- The reviewer prefers safe, upgrade-friendly, tenant-aware suggestions over "clever" but risky shortcuts, and explicitly calls out high-risk changes (posting, schema/upgrade, security/permissions, public APIs/events).
+
+Combined with the [`.continue/prompts/review-pr.md`](.continue/prompts/review-pr.md) prompt and [`PR Reviewer Rules`](.continue/rules/pr-reviewer.md), this makes the review behavior strongly aligned with real-world BC AL practices rather than a generic LLM code review.
+
 ## Highlights
 - Opinionated defaults and rules are bundled in the action (default-config.yaml) for sensible behaviour out of the box.
 - MODELS_BLOCK enables flexible model/provider selection (OpenAI, Azure Foundry, OpenRouter, ...).
