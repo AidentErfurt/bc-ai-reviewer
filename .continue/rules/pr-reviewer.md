@@ -140,3 +140,18 @@ When reviewing AL code:
   - Call out when custom logic duplicates existing base app capabilities.
 
 If the docs don’t match the code you see (version drift), state that explicitly and be conservative.
+
+When you rely on external documentation (such as Microsoft Learn docs for base application objects) or other non-repo sources:
+
+- Mention the key sources.
+- At the end of the JSON, populate the `sources` array:
+    - Add a `docs` entry when you rely on Microsoft Learn docs or other external documentation.
+    - Add a `repo` entry when your reasoning depends strongly on existing code/config in this repository.
+    - Add an `assumption` entry when you had to make a non-trivial assumption due to missing context.
+
+If you didn’t need any of these, return `sources: []`.
+
+- Prefer concrete references like:
+  - "Based on the docs for `Microsoft.Sales.Document.SalesHeader` (Sales Header, table 36)..."
+  - "According to the standard posting logic described in the Sales Post codeunit documentation..."
+- Include URLs **only when they are stable and clearly helpful** (e.g. a Microsoft Learn page for a specific object or concept).
