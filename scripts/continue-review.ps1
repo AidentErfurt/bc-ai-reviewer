@@ -776,6 +776,14 @@ function Invoke-ContinueCli {
   $stdout = if (Test-Path $tempCnOut) { Get-Content -Raw $tempCnOut } else { "" }
 
   if ($exit -ne 0) {
+    Write-Host "::group::Continue CLI error output"
+    if ($stdout) {
+      $stdout -split "`n" | ForEach-Object { Write-Host $_ }
+    } else {
+      Write-Host "(no output from cn)"
+    }
+    Write-Host "::endgroup::"
+
     throw ("Continue CLI failed (exit {0})." -f $exit)
   }
 
