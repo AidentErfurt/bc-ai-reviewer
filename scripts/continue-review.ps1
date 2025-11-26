@@ -880,7 +880,7 @@ Write-Host ("Continue suggestedAction: {0} -> GitHub review event: {1}" -f `
   $suggestedActionValue, $event)
 
 # Footer to credit engine/config (non-blocking)
-$footer = "`n`n---`n_Review powered by [Continue CLI](https://continue.dev) and [bc-ai-reviewer](https://github.com/AidentErfurt/bc-ai-reviewer)_."
+$footer = "`n`n---`n_Review powered by [Continue CLI](https://github.com/continuedev/continue) and [bc-ai-reviewer](https://github.com/AidentErfurt/bc-ai-reviewer)_."
 $summaryBody = ($review.summary ?? "Automated review") + $footer
 
 $summaryResp = Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body @{
