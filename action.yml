@@ -108,13 +108,6 @@ runs:
       run: |      
         npm i -g @continuedev/cli
 
-    # (Optional) Install uv so Serena MCP can be launched by Continue if your config uses uvx
-    - name: Install uv (for Serena MCP, optional)
-      shell: bash
-      run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh || true
-        echo "$HOME/.local/bin" >> $GITHUB_PATH || true
-
     - name: Run AI Code Review (Continue + MCP)
       shell: pwsh
       env:
@@ -143,13 +136,13 @@ runs:
                 # Always create merged config from MODELS_BLOCK and write to runner temp
         $mergeOut = Join-Path $env:RUNNER_TEMP 'continue-config.yaml'
         Write-Host "Creating merged config at $mergeOut from MODELS_BLOCK"
-                  # The merge helper reads MODELS_BLOCK from the environment
-          $env:MODELS_BLOCK = "${{ inputs.MODELS_BLOCK }}"
-          & "${{ github.action_path }}/.github/actions/continue/merge-config.ps1" -out $mergeOut
-          $cfgPath = $mergeOut
+        
+        # The merge helper reads MODELS_BLOCK from the environment
+        $env:MODELS_BLOCK = "${{ inputs.MODELS_BLOCK }}"
+        & "${{ github.action_path }}/.github/actions/continue/merge-config.ps1" -out $mergeOut
+        $cfgPath = $mergeOut
 
-
-                        # Export CONTINUE_CONFIG for the PowerShell script to pick up
+        # Export CONTINUE_CONFIG for the PowerShell script to pick up
         $env:CONTINUE_CONFIG = $cfgPath
 
         & "${{ github.action_path }}/scripts/continue-review.ps1" @params
