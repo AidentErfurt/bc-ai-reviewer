@@ -30,5 +30,13 @@ prompts:
   - uses: file://.continue/prompts/review-pr.md
 
 docs: []
-mcpServers: []
+mcpServers:
+  - name: "microsoft-learn"
+    type: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "mcp-remote"
+      - "https://learn.microsoft.com/api/mcp"
+    autoConnect: true
 data: []

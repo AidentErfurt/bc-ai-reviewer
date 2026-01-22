@@ -512,15 +512,6 @@ $previousComments = @(
 $hasPreviousComments = $previousComments.Count -gt 0
 
 $reviewContract = @"
-You are a **senior Dynamics 365 Business Central AL architect and code reviewer**.
-
-Your goals:
-
-- Produce a **Business Central-aware, professional PR review** that:
-  - Follows ALGuidelines.dev (AL Guidelines / Vibe Coding Rules) and official AL analyzers (CodeCop, PerTenantExtensionCop, AppSourceCop, UICop).
-  - Evaluates both **code quality** and **business process impact** (posting, journals, VAT, dimensions, approvals, inventory, pricing, etc.).
-  - Provides **short, actionable inline comments** plus a single, high-quality markdown review.
-
 You will be given (in the prompt body):
 
 - `files`: changed files with **numbered diffs**.
@@ -528,9 +519,11 @@ You will be given (in the prompt body):
 - `contextFiles`: additional files (e.g. `app.json`, permission sets, markdown docs) for reasoning only.
 - `bcObjects`: parsed AL object metadata per file (objectType, id, name, PageType, ApplicationArea, UsageCategory, SourceTable, namespace, usings).
 - `pullRequest`: title, description, and SHAs.
-
 - `projectContext`: optional extra context from the workflow.
 - `previousComments`: earlier PR review comments for context (if any).
+
+Your reviewer persona, Business Central–specific rules, and review axes are defined in the main Continue prompt (`Review PR`) and its rules.
+**This contract only defines the required JSON output and how to interpret the data above.**
 
 Return **only this JSON object** (no markdown fences, no extra text):
 
@@ -544,12 +537,18 @@ Return **only this JSON object** (no markdown fences, no extra text):
       "suggestion": "Optional AL replacement snippet (≤6 lines) with no backticks and no 'suggestion' label. Leave empty string if no suggestion."
     }
   ],
+  "sources": [
+    {
+      "type": "docs",
+      "description": "Short human-readable explanation of the source or assumption.",
+      "url": "Optional URL (for docs/external resources); empty string if not applicable."
+    }
+  ],    
   "suggestedAction": "approve | request_changes | comment",
   "confidence": 0.0
 }
 
 Requirements for `summary`:
-
 - It is the **primary review output** and should stand alone as a professional review.
 - Use the headings exactly:
   - `### Summary`
@@ -574,25 +573,37 @@ Requirements for `summary`:
 - Do **not** include raw JSON or the `validLines`/`files` structures in the markdown.
 
 Requirements for `comments`:
-
 - Use at most $maxInline comments; prioritize **blockers**, correctness, upgrade risks, and business process impact.
-- Don't duplicate earlier comments (previousComments). Don't repeat these inline; if they’re still relevant, mention that in Summary instead.
-- comments: [] is valid and recommended when there’s nothing new and high-value.
+- Don't duplicate earlier comments (`previousComments`). Don't repeat these inline; if they’re still relevant, mention that in `summary` instead.
+- `comments: []` is valid and recommended when there’s nothing new and high-value.
 - Each comment object has:
-  - `path`: file path from the diff. Must match a file present in `files`.
-  - `line`: a line number taken only from `validLines[path]` (these are HEAD/RIGHT line numbers from the diff).
-  - `remark`: the natural-language feedback (≤ 3 short paragraphs). Be direct and respectful.
-  - `suggestion`: optional AL replacement snippet (≤ 6 lines). **No backticks**, no `suggestion` label; the caller will wrap it in the correct GitHub ```suggestion``` block.
+  - 'path': file path from the diff. Must match a file present in `files`.
+  - 'line': a line number taken only from `validLines[path]` (these are HEAD/RIGHT line numbers from the diff).
+  - 'remark': the natural-language feedback (≤ 3 short paragraphs). Be direct and respectful.
+  - 'suggestion': optional AL replacement snippet (≤ 6 lines). **No backticks**, no `suggestion` label; the caller will wrap it in the correct GitHub ```suggestion``` block.
 - If there is no safe, minimal replacement, set `suggestion` to an empty string.
 
+Requirements for `sources`:
+- Use this array to make your reasoning transparent.
+- Include an entry whenever you rely on:
+  - Microsoft Learn docs (via tools),
+  - Other external documentation,
+  - Important assumptions due to missing information.
+- For Microsoft Learn docs, prefer one entry per *topic* (e.g. "Sales Header table behavior") instead of one per individual field.
+- If you didn't need any external information or special assumptions, return `sources: []`.
+- Each source object has:
+  - 'type': one of `docs`, `repo`, or `assumption`.
+  - 'description': short human-readable explanation of the source or assumption.
+  - 'url': optional URL (for docs/external resources); empty string if not applicable.
 
 Additional constraints:
-
 - Do not reference `contextFiles` by path or filename in comments; they are for your reasoning only.
 - When you are unsure about business impact, say so explicitly in the **Summary** and state your assumption (e.g., “Assuming this codeunit is only used for internal tools…”).
 - If there are more potential comments than the allowed limit, aggregate the extra feedback into the `summary` under the appropriate headings.
+
 $BasePromptExtra
 "@
+
 
 $payload = @{
   files          = $numberedFiles
@@ -765,6 +776,14 @@ function Invoke-ContinueCli {
   $stdout = if (Test-Path $tempCnOut) { Get-Content -Raw $tempCnOut } else { "" }
 
   if ($exit -ne 0) {
+    Write-Host "::group::Continue CLI error output"
+    if ($stdout) {
+      $stdout -split "`n" | ForEach-Object { Write-Host $_ }
+    } else {
+      Write-Host "(no output from cn)"
+    }
+    Write-Host "::endgroup::"
+
     throw ("Continue CLI failed (exit {0})." -f $exit)
   }
 
@@ -843,6 +862,11 @@ $normalizedComments = $rawComments | Where-Object {
     $_ -and $_.path -and $_.line -and $_.remark
 }
 
+# Normalize sources to an array (for consistency)
+if (-not ($review.PSObject.Properties.Name -contains 'sources') -or -not $review.sources) {
+  $review | Add-Member -NotePropertyName sources -NotePropertyValue @() -Force
+}
+
 $review | Add-Member -NotePropertyName comments -NotePropertyValue $normalizedComments -Force
 
 Write-Host ("Model returned {0} comment(s); using {1} after normalization." -f `
@@ -858,6 +882,7 @@ if ($DryRun) {
       summary         = $review.summary
       suggestedAction = $review.suggestedAction
       comments        = $review.comments
+      sources         = $review.sources
     }
     $out | ConvertTo-Json -Depth 6 | ForEach-Object { Write-Host $_ }
   } catch {
@@ -889,8 +914,31 @@ Write-Host ("Continue suggestedAction: {0} -> GitHub review event: {1}" -f `
   $suggestedActionValue, $event)
 
 # Footer to credit engine/config (non-blocking)
-$footer = "`n`n---`n_Review powered by [Continue CLI](https://continue.dev) and [bc-ai-reviewer](https://github.com/AidentErfurt/bc-ai-reviewer)_."
-$summaryBody = ($review.summary ?? "Automated review") + $footer
+$footer = "`n`n---`n_Review powered by [Continue CLI](https://github.com/continuedev/continue) and [bc-ai-reviewer](https://github.com/AidentErfurt/bc-ai-reviewer)_."
+# Optional "Sources" section (if model returned any)
+$sourceSection = ""
+if ($review.PSObject.Properties.Name -contains 'sources' -and $review.sources) {
+  $sources = @($review.sources) | Where-Object { $_ -and $_.description }
+
+  if ($sources.Count -gt 0) {
+    $sourceLines = $sources | ForEach-Object {
+      $line = "- $($_.description)"
+      if ($_.PSObject.Properties.Name -contains 'url' -and `
+          $null -ne $_.url -and `
+          -not [string]::IsNullOrWhiteSpace([string]$_.url)) {
+        $line += " – $($_.url)"
+      }
+      $line
+    }
+
+    $sourceSection = "`n`n#### Sources`n" + ($sourceLines -join "`n")
+  } else {
+    Write-Host "No valid sources returned by the model."
+  }
+}
+
+$summaryCore = if ($review.summary) { $review.summary } else { "Automated review" }
+$summaryBody = $summaryCore + $sourceSection + $footer
 
 $summaryResp = Invoke-GitHub -Method POST -Path "/repos/$owner/$repo/pulls/$prNumber/reviews" -Body @{
   body      = $summaryBody
