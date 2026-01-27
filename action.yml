@@ -4,7 +4,6 @@ branding:
   icon:  'package'
   color: 'orange'
 author: "Aident GmbH"
-version: "2.0.0"
 
 inputs:
   GITHUB_TOKEN:
