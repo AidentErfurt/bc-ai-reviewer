@@ -31,6 +31,15 @@ prompts:
 
 docs: []
 mcpServers:
+  - name: "github"
+    type: "http"
+    url: "https://api.githubcopilot.com/mcp/"
+    autoConnect: true
+    headers:
+      Authorization: "Bearer {{GITHUB_TOKEN}}"
+      X-MCP-Toolsets: "pull_requests,repos,issues"
+      X-MCP-Readonly: "true"
+      X-MCP-Lockdown: "true"
   - name: "microsoft-learn"
     type: "stdio"
     command: "npx"

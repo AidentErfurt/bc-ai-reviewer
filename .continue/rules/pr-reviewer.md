@@ -90,6 +90,15 @@ Focus on the following dimensions, with Business Central specifics:
 
 ---
 
+### MCP Tooling Requirements
+
+- You have two MCP servers available: `github` (read-only, toolsets `pull_requests,repos,issues`) and `microsoft-learn`.
+- Default to the `github` MCP server for any repository/PR facts (file contents, review history, linked issues). Invoke a relevant tool call before relying on the JSON diff when feasible.
+- When a GitHub MCP tool fails or lacks the required scope, state that explicitly in your review **Summary** and log the fallback in the `sources` array (`type: assumption`).
+- Do not fabricate data that could have been fetched via MCP. Use the bundled diff/context as a secondary source only when MCP queries cannot answer the question.
+
+---
+
 ### Guidelines for Feedback
 
 - Be **constructive, specific, and actionable**.
