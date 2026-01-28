@@ -8,6 +8,8 @@ Run an AI-powered, Business Central-specific code review on pull requests. This 
 - Sends a structured prompt to your chosen LLM provider (Azure OpenAI, OpenAI, OpenRouter.ai).
 - Posts a summary review and fine-grained inline comments on the PR.
 
+**Demo**: https://github.com/skeck/bc-reviewer/pull/11
+
 ## Why this is Business Central–specific
 
 This action is not a generic code reviewer. It is tailored for Business Central AL projects:
