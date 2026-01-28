@@ -528,7 +528,7 @@ Your reviewer persona, Business Central–specific rules, and review axes are de
 Return **only this JSON object** (no markdown fences, no extra text):
 
 {
-  "summary": "Full markdown review for the PR, using the headings: '### Summary', '### Major Issues (blockers)', '### Minor Issues / Nits', '### Tests', '### Security & Privacy', '### Performance', '### Suggested Patches', '### Changelog / Migration Notes', '### Verdict'. Each section must follow the Business Central AL review template and explicitly mention risk level and business process impact where relevant.",
+  "summary": "Full markdown review for the PR, using the headings: '### Summary', '### Major Issues (blockers)', '### Minor Issues / Nits', '### Security & Privacy', '### Performance', '### Suggested Patches', '### Changelog / Migration Notes', '### Verdict'. Each section must follow the Business Central AL review template and explicitly mention risk level and business process impact where relevant.",
   "comments": [
     {
       "path": "path/in/repo.al",
@@ -554,7 +554,6 @@ Requirements for `summary`:
   - `### Summary`
   - `### Major Issues (blockers)`
   - `### Minor Issues / Nits`
-  - `### Tests`
   - `### Security & Privacy`
   - `### Performance`
   - `### Suggested Patches`
