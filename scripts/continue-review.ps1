@@ -913,7 +913,7 @@ Write-Host ("Continue suggestedAction: {0} -> GitHub review event: {1}" -f `
   $suggestedActionValue, $event)
 
 # Footer to credit engine/config (non-blocking)
-$footer = "`n`n---`n_Review powered by [Continue CLI](https://github.com/continuedev/continue) and [bc-ai-reviewer](https://github.com/AidentErfurt/bc-ai-reviewer)_."
+$footer = "`n`n---`n_Review powered by [Continue CLI](https://github.com/continuedev/continue) and [bc-ai-reviewer](https://github.com/ACSG-BizApps/bc-ai-reviewer)_."
 # Optional "Sources" section (if model returned any)
 $sourceSection = ""
 if ($review.PSObject.Properties.Name -contains 'sources' -and $review.sources) {
