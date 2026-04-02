@@ -68,7 +68,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run AI Code Review
-        uses: AidentErfurt/bc-ai-reviewer@main
+        uses: ACSG-BizApps/bc-ai-reviewer@main
         with:
           GITHUB_TOKEN: ${{ github.token }}
           MODELS_BLOCK: |
